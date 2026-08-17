@@ -1,0 +1,21 @@
+# Raw and derived geodata (large, re-fetchable — not versioned)
+local-data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
