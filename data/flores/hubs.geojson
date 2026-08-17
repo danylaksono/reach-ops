@@ -1,0 +1,16 @@
+{
+"type": "FeatureCollection",
+"name": "hubs",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "kab_kota_code": "53.16", "kab_kota_name": "Nagekeo", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 121.273404558094029, -8.689744057757029 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.09", "kab_kota_name": "Ngada", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 121.001699812925395, -8.664419492488962 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.08", "kab_kota_name": "Ende", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 121.735475409651698, -8.676245414608658 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.19", "kab_kota_name": "Manggarai Timur", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 120.68931390184612, -8.572924738936223 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.15", "kab_kota_name": "Manggarai Barat", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 119.988355066457686, -8.602855790526514 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.07", "kab_kota_name": "Sikka", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 122.306598697869333, -8.609579313467014 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.06", "kab_kota_name": "Flores Timur", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 122.944251518434513, -8.365141935214817 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.13", "kab_kota_name": "Lembata", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 123.541005522766483, -8.381409153607477 ] } },
+{ "type": "Feature", "properties": { "kab_kota_code": "53.10", "kab_kota_name": "Manggarai", "source": "placeholder-regency-centroid" }, "geometry": { "type": "Point", "coordinates": [ 120.401192209660593, -8.568634341903641 ] } }
+]
+}

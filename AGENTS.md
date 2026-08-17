@@ -90,9 +90,11 @@ Lean on existing WASM/Rust/DuckDB functionality rather than building from
 scratch where a solid option already exists:
 - DuckDB-WASM with the `spatial` and `httpfs` extensions, for in-browser
   querying of local and cloud-native (Source.coop-hosted) geospatial data.
-- An existing Rust OSM-routing crate (e.g. routx) as a starting point for
-  the graph engine, rather than writing A*/Dijkstra and OSM parsing from
-  zero.
+- An existing Rust graph/pathfinding crate as a starting point rather than
+  writing Dijkstra from zero — **not** `routx` as originally suggested
+  here; see [Lessons learned](#lessons-learned) for why. `petgraph`
+  (`DiGraph` + hand-rolled Dijkstra respecting a per-edge `passable` flag)
+  is what Phase 1 actually used.
 - H3 (already part of the [[spatial-analytical-intent]] stack) as the
   common spatial index tying Kontur population data, damage-and-loss
   aggregation, and reachability output together.
@@ -104,15 +106,17 @@ scratch where a solid option already exists:
    (GeoJSON / PMTiles / similar).
 
 2. **Client-side accessibility engine** — runs in the browser, no server
-   required for the core reachability computation. Loads the prepared
-   graph, runs shortest-path / reachability queries, and recomputes when
-   a road's status changes (broken/restored). Candidate implementation:
-   Rust compiled to WebAssembly (e.g. via wasm-pack), potentially building
-   on an existing OSM routing crate such as routx rather than writing a
-   router from scratch. DuckDB (or DuckDB-WASM) is a good fit for tabular
-   and spatial queries (e.g. joining damage data to settlements) but
-   should NOT be used to walk the graph itself — keep graph traversal in
-   the dedicated routing engine.
+   required for the core reachability computation (a static file server
+   is still needed to serve the page and data — browsers block `fetch()`
+   of local files under `file://`). Loads the prepared graph, runs
+   shortest-path / reachability queries, and recomputes when a road's
+   status changes (broken/restored). Implementation: Rust compiled to
+   WebAssembly via `wasm-bindgen`, on `petgraph` rather than an
+   OSM-specific routing crate (see [Lessons learned](#lessons-learned)).
+   DuckDB (or DuckDB-WASM) is a good fit for tabular and spatial queries
+   (e.g. joining damage data to settlements) but should NOT be used to
+   walk the graph itself — keep graph traversal in the dedicated routing
+   engine.
 
 3. **Field report store** — a proper database, external to the
    client-side layer, because field reporting is inherently multi-user,
@@ -161,10 +165,25 @@ report.
 ## Phased implementation plan
 
 ### Phase 0 — Data preparation
-Python pipeline using osmium to pull and filter the OSM extract for
-Flores down to roads and buildings, supplemented with cloud-native
-sources (Kontur Population, Source.coop building data) queried directly
-via DuckDB where they improve coverage or save a download step. Outputs:
+Two sub-steps, only the second of which is built so far:
+
+1. **Raw extraction (osmium) — not yet implemented as code.** Pull roads
+   and buildings out of a raw `.osm.pbf` (Geofabrik/Overpass) into the
+   national- or region-scale layers Phase 0 clips from. Skipped so far
+   only because `local-data/` already had `indonesia_roads.gpkg` and
+   `indonesia_buildings.parquet` on hand, pre-extracted by hand outside
+   this repo. That's a reproducibility gap: retargeting this pipeline at
+   a new disaster site (or rebuilding from a bare `.osm.pbf`) needs this
+   step written as an actual osmium/pyosmium script, not assumed to
+   pre-exist. Keep this step distinct from step 2 rather than folding
+   raw-PBF parsing into the DuckDB clip job — osmium is the right tool
+   for OSM-native extraction; DuckDB `spatial` is the right tool for
+   clipping/joining already-tabular geodata.
+2. **Study-area clip (DuckDB `spatial`) — implemented in `pipeline/`.**
+   Filters the (step 1) national-scale roads/buildings layers down to
+   the study area boundary, and joins in cloud-native sources (Kontur
+   Population, Source.coop building data) via DuckDB where they improve
+   coverage or save a download step. Outputs:
 - a clean, routable road network file (GeoJSON or similar graph-ready
   format)
 - a buildings-per-settlement aggregation (OSM and/or Source.coop)
@@ -172,8 +191,13 @@ via DuckDB where they improve coverage or save a download step. Outputs:
   population data to settlement/admin-unit polygons (this is a
   placeholder baseline, not real ground-truth damage, until field
   reports arrive)
+- placeholder aid-hub points (regency centroids — AGENTS.md never
+  specified real hub locations; swap in real airstrip/port/warehouse
+  coordinates once a coordinator supplies them)
 
-To run locally first, before any server or database is involved.
+To run locally first, before any server or database is involved. See
+[Lessons learned](#lessons-learned) for why each pipeline step runs as
+its own subprocess rather than sharing one long-lived connection.
 
 ### Phase 1 — Client-side accessibility engine
 Build the Rust/WASM routing engine using the Phase 0 road network.
@@ -204,6 +228,101 @@ breaks...") to continuously refine aid routing. The prototype described
 above is meant to be a credible seed for this, not a finished version of
 it.
 
+## Lessons learned
+
+Concrete problems hit while building Phase 0 and Phase 1, and how they
+were resolved — read this before repeating the same investigation.
+
+### Data pipeline (DuckDB spatial / GDAL)
+
+- **Unlink before every GDAL-driven `COPY ... TO ... GeoJSON`.** DuckDB's
+  GDAL GeoJSON writer segfaults (a native crash, not a catchable Python
+  exception) if the destination file already exists. Every pipeline
+  output path goes through a `fresh()` helper (`pipeline/config.py`) that
+  deletes the file first — without it, a second run of the same step
+  reliably crashes.
+- **Run each pipeline step in its own process.** Even with the overwrite
+  fix, repeated `ST_Read`/GDAL-backed `COPY TO` calls inside one
+  long-lived DuckDB connection segfaulted intermittently, in a different
+  step each time — looked like corrupted GDAL driver state carried across
+  calls, not a DuckDB/SQL bug. `pipeline/run.py` now shells out to
+  `python -m pipeline.<step>` per step; each gets a fresh connection, and
+  a crash is isolated and attributable instead of corrupting the whole
+  run.
+- **A step can still fail once with `Invalid Input Error: Unsupported
+  geometry type in WKB`.** Seen even with process isolation, on
+  `spatial`-extension load. A bare rerun of that step has always
+  succeeded, with output counts identical to a clean run — treat it as a
+  platform/extension-load flake to retry, not a data problem, as long as
+  the retry's counts match.
+- **`&&` (bbox overlap) is not defined for `GEOMETRY`** in this DuckDB
+  spatial version — only for arrays. Use `ST_Intersects` directly rather
+  than assuming a bbox pre-filter shortcut compiles; check the error
+  message (`Candidate functions: &&(T[], T[])`) rather than guessing at
+  a workaround.
+- **`ST_Transform` defaults to EPSG-authoritative axis order** (lat, lon
+  for geographic CRSs), not the GIS-conventional (lon, lat) — pass
+  `always_xy := true` or coordinates come out swapped with no error to
+  flag it. Don't assume a source is EPSG:4326; check with
+  `st_read_meta()` (Kontur population ships in EPSG:3857, everything
+  else here happened to already be EPSG:4326).
+- **GDAL-exported GeoJSON uses `""` for missing string properties, not
+  `null`.** Matters for downstream parsers — e.g. the Rust side uses
+  `#[serde(default)]` on `String` fields, not `Option<String>`.
+
+### Engine (Rust / WebAssembly)
+
+- **Check a suggested crate against the actual requirement before
+  scaffolding around it.** This doc originally pointed at `routx` for
+  the routing engine. A five-minute check (crates.io + docs.rs) showed
+  it only parses raw `.osm.pbf` (file I/O, plus `flate2`/`bzip2`/
+  `protobuf` dependencies that are awkward for `wasm32`) and has no API
+  for disabling/restoring an edge — the one thing Phase 1 actually
+  needs. Cheaper to verify a dependency's fit up front than to discover
+  it mid-scaffold.
+- **Coordinate-based node deduplication is only safe if verified on the
+  real data.** The engine merges graph nodes by exact matching lon/lat,
+  which only works if the extraction upstream preserved OSM's shared
+  node coordinates bit-for-bit. Checked before relying on it: ~21% of
+  endpoints in `roads.geojson` are shared by 2+ segments, confirming
+  exact matches survive. Don't assume this holds for a new source
+  dataset — recheck it the same way.
+- **A linear-scan nearest-node lookup does not scale.** Snapping 1,619
+  settlement centroids against Flores's ~838k graph nodes with a linear
+  scan took over a minute in-browser (still hadn't returned). A uniform
+  grid spatial index (`engine/src/spatial_index.rs`) brought the same
+  query under 100ms. Benchmark spatial lookups against real data
+  volumes, not a handful of test points — 9 hub lookups looked instant
+  and hid the problem until settlement-scale snapping was tried.
+- **Design the wasm API around what's actually called repeatedly.** The
+  first cut re-passed and re-snapped every hub/target coordinate on
+  every `compute_reachability()` call, so each road break/restore paid
+  the full snap cost again. Splitting into one-time `set_hubs`/
+  `set_targets` (cached) plus a cheap `compute_reachability()` (just
+  Dijkstra plus O(1) lookups) brought a recompute down to ~300ms in the
+  browser.
+- **Verify in the actual target environment, not just `cargo test`.**
+  The nearest-node slowness only surfaced once the compiled wasm module
+  was driven in a real browser tab — native benchmarks looked fine
+  because they only exercised 9 hub lookups, not 1,619 settlement
+  lookups at the scale the web page actually needed.
+
+### Tooling / process
+
+- **`LNK1104: cannot open file ...exe` from `cargo build`/`cargo test`
+  on Windows has always been transient** (looks like antivirus or a
+  file-handle lock on the freshly-built binary) — an immediate retry has
+  always cleared it. Don't debug it as a code problem.
+- **Browser-automation tooling can drop artifacts into the repo root.**
+  Playwright MCP wrote snapshot/console logs to `.playwright-mcp/` in
+  the working directory during manual testing — gitignored now, but
+  check for and ignore whatever directory your browser-testing tool
+  uses before it ends up in a commit.
+- **"No server needed" (Phase 1, above) means no backend/API**, not no
+  server at all — a static file server is still required, since browsers
+  block `fetch()` of local files under `file://`. `python -m
+  http.server` from the repo root is enough.
+
 ## Open notes / things not yet resolved
 
 - User has other ideas for this project not yet detailed — to be added
@@ -218,3 +337,8 @@ it.
 - Field-report submission form for ground teams should be kept as simple
   as possible (location, status, optional photo) — usability in the
   field matters more than analytical sophistication at the reporting end.
+- The raw-extraction step (osmium, from `.osm.pbf` to national/regional
+  roads+buildings layers) is not yet written as code — see Phase 0 above.
+  Needed before this pipeline can be run reproducibly from scratch (a new
+  disaster site, or a clean checkout without the current `local-data/`
+  already populated).

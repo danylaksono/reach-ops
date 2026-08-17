@@ -1,17 +1,23 @@
 """Clip Kontur population hexagons (H3, 400m) to the study area, reproject
 from the source EPSG:3857 to EPSG:4326, and aggregate population per
 settlement by joining each hex's centroid to the containing settlement
-polygon."""
+polygon.
 
-import duckdb
+Run standalone: python -m pipeline.population [--study-area flores]
+"""
 
-from pipeline.config import SOURCES, study_area_dir
+from pipeline.boundary import load_boundary_wkt
+from pipeline.config import SOURCES, fresh, study_area_dir
+from pipeline.db import connect
 
 
-def run(con: duckdb.DuckDBPyConnection, study_area: str, boundary_wkt: str) -> None:
+def run(study_area: str) -> None:
+    con = connect()
+    boundary_wkt = load_boundary_wkt(con, study_area)
+
     out_dir = study_area_dir(study_area)
     settlements_path = out_dir / "settlements.geojson"
-    out_path = out_dir / "population_by_settlement.parquet"
+    out_path = fresh(out_dir / "population_by_settlement.parquet")
 
     con.execute(
         f"""
@@ -45,3 +51,9 @@ def run(con: duckdb.DuckDBPyConnection, study_area: str, boundary_wkt: str) -> N
         f"SELECT SUM(population) FROM read_parquet('{out_path}')"
     ).fetchone()[0]
     print(f"[population] {study_area}: {round(total):,} people aggregated across settlements")
+
+
+if __name__ == "__main__":
+    from pipeline.cli import study_area_arg
+
+    run(study_area_arg())

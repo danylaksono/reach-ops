@@ -1,15 +1,21 @@
 """Clip building points to the study area and aggregate counts per
-settlement, as a proxy input for the damage-and-loss baseline."""
+settlement, as a proxy input for the damage-and-loss baseline.
 
-import duckdb
+Run standalone: python -m pipeline.buildings [--study-area flores]
+"""
 
-from pipeline.config import SOURCES, study_area_dir
+from pipeline.boundary import load_boundary_wkt
+from pipeline.config import SOURCES, fresh, study_area_dir
+from pipeline.db import connect
 
 
-def run(con: duckdb.DuckDBPyConnection, study_area: str, boundary_wkt: str) -> None:
+def run(study_area: str) -> None:
+    con = connect()
+    boundary_wkt = load_boundary_wkt(con, study_area)
+
     out_dir = study_area_dir(study_area)
     settlements_path = out_dir / "settlements.geojson"
-    out_path = out_dir / "buildings_by_settlement.parquet"
+    out_path = fresh(out_dir / "buildings_by_settlement.parquet")
 
     con.execute(
         f"""
@@ -36,3 +42,9 @@ def run(con: duckdb.DuckDBPyConnection, study_area: str, boundary_wkt: str) -> N
         f"SELECT SUM(building_count) FROM read_parquet('{out_path}')"
     ).fetchone()[0]
     print(f"[buildings] {study_area}: {total} buildings aggregated across settlements")
+
+
+if __name__ == "__main__":
+    from pipeline.cli import study_area_arg
+
+    run(study_area_arg())

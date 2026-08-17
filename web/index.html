@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Reach-Ops — Phase 1 engine smoke test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+    #status { color: #555; }
+    table { border-collapse: collapse; margin-top: 1rem; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.3rem 0.6rem; text-align: left; font-size: 0.9rem; }
+    th { background: #f0f0f0; }
+    .unreachable { color: #b00; font-weight: bold; }
+    button { margin: 0.5rem 0.5rem 0.5rem 0; padding: 0.4rem 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>Reach-Ops — Phase 1 engine smoke test</h1>
+  <p id="status">Loading…</p>
+
+  <div>
+    <button id="break-btn" disabled>Break a road near the first hub</button>
+    <button id="restore-btn" disabled>Restore it</button>
+  </div>
+
+  <table id="results">
+    <thead>
+      <tr><th>Settlement</th><th>Regency</th><th>Distance from nearest hub</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script type="module">
+    import init, { Engine } from './pkg/reach_ops_engine.js';
+
+    const statusEl = document.getElementById('status');
+    const tbody = document.querySelector('#results tbody');
+    const breakBtn = document.getElementById('break-btn');
+    const restoreBtn = document.getElementById('restore-btn');
+
+    let engine, targets, hubs, brokenOsmId;
+
+    function metersLabel(m) {
+      if (m === null || m === undefined) return '<span class="unreachable">unreachable</span>';
+      return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+    }
+
+    function render(results) {
+      const byId = new Map(results.map(r => [r.id, r.distance_m]));
+      const rows = targets
+        .map(t => ({ ...t, distance_m: byId.get(t.id) }))
+        .sort((a, b) => (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity))
+        .slice(0, 30);
+      tbody.innerHTML = rows
+        .map(r => `<tr><td>${r.name}</td><td>${r.kab_kota_name}</td><td>${metersLabel(r.distance_m)}</td></tr>`)
+        .join('');
+    }
+
+    function recompute() {
+      const resultsJson = engine.compute_reachability();
+      render(JSON.parse(resultsJson));
+    }
+
+    async function main() {
+      await init();
+
+      const [roadsGeojson, hubsGeojson, settlementsGeojson] = await Promise.all([
+        fetch('../data/flores/roads.geojson').then(r => r.text()),
+        fetch('../data/flores/hubs.geojson').then(r => r.json()),
+        fetch('../data/flores/settlements.geojson').then(r => r.json()),
+      ]);
+
+      statusEl.textContent = 'Building graph…';
+      engine = new Engine(roadsGeojson);
+
+      hubs = hubsGeojson.features.map(f => f.geometry.coordinates);
+      targets = settlementsGeojson.features.map(f => {
+        const [lon, lat] = centroidOfPolygon(f.geometry);
+        return { id: f.properties.code, name: f.properties.name, kab_kota_name: f.properties.kab_kota_name, lon, lat };
+      });
+
+      statusEl.textContent = 'Snapping hubs and settlements to the graph…';
+      engine.set_hubs(JSON.stringify(hubs));
+      engine.set_targets(JSON.stringify(targets.map(t => ({ id: t.id, lon: t.lon, lat: t.lat }))));
+
+      statusEl.textContent = `Loaded ${engine.node_count().toLocaleString()} nodes, ` +
+        `${engine.edge_count().toLocaleString()} edges, ${hubs.length} hubs, ${targets.length} settlements.`;
+
+      // Grab a road segment's osm_id near the first hub, for the break/restore demo.
+      const roads = JSON.parse(roadsGeojson);
+      const [hubLon, hubLat] = hubs[0];
+      let nearest = null, nearestDist = Infinity;
+      for (const f of roads.features) {
+        const [lon, lat] = f.geometry.coordinates[0];
+        const d = (lon - hubLon) ** 2 + (lat - hubLat) ** 2;
+        if (d < nearestDist) { nearestDist = d; nearest = f; }
+      }
+      brokenOsmId = nearest.properties.osm_id;
+
+      breakBtn.disabled = false;
+      restoreBtn.disabled = false;
+      breakBtn.onclick = () => {
+        const n = engine.set_edge_status(brokenOsmId, false);
+        const t0 = performance.now();
+        recompute();
+        statusEl.textContent = `Marked osm_id ${brokenOsmId} broken (${n} graph edges affected). ` +
+          `Recomputed in ${(performance.now() - t0).toFixed(0)}ms.`;
+      };
+      restoreBtn.onclick = () => {
+        const n = engine.set_edge_status(brokenOsmId, true);
+        const t0 = performance.now();
+        recompute();
+        statusEl.textContent = `Restored osm_id ${brokenOsmId} (${n} graph edges affected). ` +
+          `Recomputed in ${(performance.now() - t0).toFixed(0)}ms.`;
+      };
+
+      recompute();
+    }
+
+    // Rough polygon/multipolygon centroid — averages ring vertices, good
+    // enough for snap-to-nearest-node; not an area-weighted centroid.
+    function centroidOfPolygon(geometry) {
+      const rings = geometry.type === 'Polygon' ? geometry.coordinates : geometry.coordinates.flat();
+      const ring = rings[0];
+      let sx = 0, sy = 0;
+      for (const [x, y] of ring) { sx += x; sy += y; }
+      return [sx / ring.length, sy / ring.length];
+    }
+
+    main().catch(err => {
+      statusEl.textContent = `Error: ${err.message}`;
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

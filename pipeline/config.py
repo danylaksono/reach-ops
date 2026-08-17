@@ -67,3 +67,14 @@ def study_area_dir(study_area: str) -> Path:
     out = DATA_OUT / study_area
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+def fresh(path: Path) -> Path:
+    """Delete an existing file before a GDAL-driven COPY writes it again.
+
+    DuckDB's GDAL GeoJSON writer segfaults (not a clean error) if the
+    destination file already exists, so every COPY ... TO output path
+    must be unlinked first to make pipeline reruns safe.
+    """
+    path.unlink(missing_ok=True)
+    return path

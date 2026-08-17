@@ -10,6 +10,10 @@ venv/
 # Rust
 target/
 
+# wasm-bindgen build output (generated from engine/ — run the build step
+# in README.md to regenerate)
+web/pkg/
+
 # Node
 node_modules/
 dist/
@@ -19,3 +23,6 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Playwright MCP test-run artifacts
+.playwright-mcp/
