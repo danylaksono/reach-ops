@@ -44,7 +44,14 @@ export class UI {
   }
 
   /** Wire up static controls (buttons, tabs, layer toggles). */
-  bindControls({ onBreak, onRestore, onReset, onToggleVisibility, onSort, onTab }) {
+  bindControls({
+    onBreak,
+    onRestore,
+    onReset,
+    onToggleVisibility,
+    onSort,
+    onTab,
+  }) {
     this.breakBtn.addEventListener("click", onBreak);
     this.restoreBtn.addEventListener("click", onRestore);
     this.resetBtn.addEventListener("click", onReset);

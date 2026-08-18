@@ -11,8 +11,8 @@ export async function fetchJson(path) {
 
 /** Load all static layers used by the dashboard. */
 export async function loadAll() {
-  const [roads, settlements, hubs, baseline, boundary, gik] =
-    await Promise.all([
+  const [roads, settlements, hubs, baseline, boundary, gik] = await Promise.all(
+    [
       fetchJson(`${DATA_BASE}/roads.geojson`),
       fetchJson(`${DATA_BASE}/settlements.geojson`),
       fetchJson(`${DATA_BASE}/hubs.geojson`),
@@ -21,7 +21,8 @@ export async function loadAll() {
       // GIK field reports are optional — the dashboard must boot without
       // them (e.g. before pipeline.gik has been run).
       fetchJson(`${DATA_BASE}/gik_reports.geojson`).catch(() => null),
-    ]);
+    ],
+  );
   return { roads, settlements, hubs, baseline, boundary, gik };
 }
 

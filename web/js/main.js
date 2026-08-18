@@ -37,8 +37,7 @@ async function main() {
   ui.setStatus("Loading data…");
 
   // 1. Static layers
-  const { roads, settlements, hubs, baseline, boundary, gik } =
-    await loadAll();
+  const { roads, settlements, hubs, baseline, boundary, gik } = await loadAll();
 
   // 2. wasm engine
   ui.setStatus("Building graph (wasm)…");

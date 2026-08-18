@@ -256,15 +256,7 @@ export class MapView {
         type: "circle",
         source: "gik",
         paint: {
-          "circle-radius": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            7,
-            3.5,
-            12,
-            7,
-          ],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 3.5, 12, 7],
           "circle-color": "#f2cc60",
           "circle-opacity": 0.9,
           "circle-stroke-width": 1.2,

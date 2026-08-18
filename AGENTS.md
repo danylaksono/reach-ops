@@ -29,6 +29,7 @@ flagged as high-need and still be effectively invisible to aid planners if
 nobody has modelled whether it can currently be reached.
 
 This project fills that gap with a reachability/accessibility model that:
+
 - uses OSM road network data for Flores as its base
 - lets field coordinators mark specific road segments as broken (or
   restored) based on ground reports
@@ -101,6 +102,7 @@ re-running a full extract-and-clean pipeline each time.
 
 Lean on existing WASM/Rust/DuckDB functionality rather than building from
 scratch where a solid option already exists:
+
 - DuckDB-WASM with the `spatial` and `httpfs` extensions, for in-browser
   querying of local and cloud-native (Source.coop-hosted) geospatial data.
 - An existing Rust graph/pathfinding crate as a starting point rather than
@@ -184,6 +186,7 @@ report.
 ## Phased implementation plan
 
 ### Phase 0 — Data preparation
+
 Two sub-steps, only the second of which is built so far:
 
 1. **Raw extraction (osmium) — not yet implemented as code.** Pull roads
@@ -203,6 +206,7 @@ Two sub-steps, only the second of which is built so far:
    the study area boundary, and joins in cloud-native sources (Kontur
    Population, Source.coop building data) via DuckDB where they improve
    coverage or save a download step. Outputs:
+
 - a clean, routable road network file (GeoJSON or similar graph-ready
   format)
 - a buildings-per-settlement aggregation (OSM and/or Source.coop)
@@ -228,8 +232,10 @@ To run locally first, before any server or database is involved. See
 its own subprocess rather than sharing one long-lived connection.
 
 ### Phase 1 — Client-side accessibility engine
+
 Build the Rust/WASM routing engine using the Phase 0 road network.
 Implement:
+
 - shortest-path / reachability computation from designated aid hub points
   to settlements
 - ability to mark an edge as broken/restored and recompute
@@ -241,15 +247,18 @@ Run locally against a simple web page loading the WASM module and the
 Phase 0 output — no server needed yet.
 
 ### Phase 2 — Field reports and the join
+
 Stand up the external database (e.g. local MongoDB instance) to hold
 field reports (road status, damage updates, photos, notes). Build the
 logic that:
+
 - applies field reports to update road status in the accessibility engine
 - joins population/needs/damage data against reachability output, so a
   settlement's priority (need) and its cutoff (accessibility) are visible
   together
 
 ### Future direction (not in scope for the prototype)
+
 A fuller operational dashboard, digital-twin-like, capable of simulating
 both real-time and hypothetical network conditions ("if this road
 breaks...") to continuously refine aid routing. The prototype described
@@ -278,7 +287,7 @@ were resolved — read this before repeating the same investigation.
   a crash is isolated and attributable instead of corrupting the whole
   run.
 - **A step can still fail once with `Invalid Input Error: Unsupported
-  geometry type in WKB`.** Seen even with process isolation, on
+geometry type in WKB`.** Seen even with process isolation, on
   `spatial`-extension load. A bare rerun of that step has always
   succeeded, with output counts identical to a clean run — treat it as a
   platform/extension-load flake to retry, not a data problem, as long as
@@ -349,7 +358,7 @@ were resolved — read this before repeating the same investigation.
 - **"No server needed" (Phase 1, above) means no backend/API**, not no
   server at all — a static file server is still required, since browsers
   block `fetch()` of local files under `file://`. `python -m
-  http.server` from the repo root is enough.
+http.server` from the repo root is enough.
 - **A live external feed is a snapshot, not a dependency.** The UGM GIK
   feed (`pipeline.gik`) changes as field reports arrive, so it must not
   be part of the default static base-data build — it runs on demand
@@ -358,7 +367,7 @@ were resolved — read this before repeating the same investigation.
   snapshot as a graceful no-op, never a hard failure. Also note: DuckDB's
   `SUM()` over BIGINT aggregates produces HUGEINT, which the GDAL
   GeoJSON writer rejects (`Not implemented Error: Unsupported type for
-  OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
+OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
 
 ## Open notes / things not yet resolved
 
