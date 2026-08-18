@@ -18,6 +18,10 @@ from pipeline.config import STUDY_AREAS
 
 STEPS = ["boundary", "roads", "buildings", "population", "baseline", "hubs"]
 
+# Optional steps that depend on live external feeds (not part of the
+# static base-data build). Run them separately, or pass --with-gik.
+GIK_STEPS = ["gik", "field"]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,10 +31,17 @@ def main() -> None:
         choices=sorted(STUDY_AREAS),
         help="Study area to prepare (default: flores)",
     )
+    parser.add_argument(
+        "--with-gik",
+        action="store_true",
+        help="Also fetch the live UGM GIK field-report feed and build the "
+        "field-report store seed (network required)",
+    )
     args = parser.parse_args()
 
     t0 = time.time()
-    for step in STEPS:
+    steps = STEPS + (GIK_STEPS if args.with_gik else [])
+    for step in steps:
         result = subprocess.run(
             [sys.executable, "-m", f"pipeline.{step}", "--study-area", args.study_area]
         )

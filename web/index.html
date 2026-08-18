@@ -36,6 +36,7 @@
         <div class="legend-row"><span class="swatch swatch-cutoff"></span>Unreachable downstream</div>
         <div class="legend-row"><span class="swatch swatch-broken"></span>Broken (marked)</div>
         <div class="legend-row"><span class="swatch swatch-hub"></span>Access hub</div>
+        <div class="legend-row"><span class="swatch swatch-gik"></span>GIK field report</div>
       </div>
 
       <div id="tooltip" class="tooltip" hidden></div>
@@ -90,6 +91,8 @@
             checked /><span>Settlements</span></label>
         <label class="switch-row"><input type="checkbox" id="toggle-hubs" checked /><span>Access hubs</span></label>
         <label class="switch-row"><input type="checkbox" id="toggle-break" checked /><span>Break layer</span></label>
+        <label class="switch-row"><input type="checkbox" id="toggle-gik" checked /><span>GIK field reports
+            <small>(UGM)</small></span></label>
 
         <h3>Settlement view</h3>
         <label>Sort by <select id="settle-sort">
@@ -120,6 +123,15 @@
             <span><i class="dot" style="background:#f68f7f"></i>520–2300</span>
             <span><i class="dot" style="background:#d0453c"></i>over 2300</span>
           </div>
+        </section>
+        <section id="gik-section">
+          <h3>GIK field reports</h3>
+          <p id="gik-status" class="muted">Loading…</p>
+          <p class="muted">Crowdsourced needs reports from the UGM Geoportal
+            Informasi Kebencanaan (<a href="https://geoportal.science/gik/dashboard.html"
+              target="_blank" rel="noopener">geoportal.science/gik</a>), fetched by
+            <code>pipeline.gik</code> and clipped to the study area. Yellow markers
+            show reported needs (households affected, people, items needed).</p>
         </section>
       </div>
 

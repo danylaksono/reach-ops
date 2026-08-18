@@ -79,6 +79,19 @@ re-running a full extract-and-clean pipeline each time.
   by bounding box for the study area and pull only what's needed. Worth
   checking for a buildings dataset here, since OSM building coverage in
   rural areas like Flores may be sparse.
+- **UGM GIK (Geoportal Informasi Kebencanaan)** — a public,
+  crowdsourced field-report feed for disaster response
+  (`https://geoportal.science/gik/get_data.php` returns a GeoJSON
+  FeatureCollection of needs reports: location, households affected,
+  people affected, needs, reporter contact, photo, status). Run by the
+  Faculty of Geography UGM + KLHK + SNC; data is explicitly opened for
+  situational response during disasters. Fetched by `pipeline.gik`
+  (server-side, avoids CORS), clipped to the study area, and used in
+  three places: the web dashboard overlay, the baseline needs join, and
+  the field-report store seed. **Important: the feed is live and
+  crowdsourced — re-run `python -m pipeline.gik` to refresh the
+  snapshot; also note it contains personal data (reporter names, phone
+  numbers) so treat it as operational, not a redistributable dataset.**
 - General pattern: use DuckDB's `spatial` and `httpfs` extensions (locally
   or via DuckDB-WASM in-browser) to query remote GeoParquet/COG data in
   place, rather than defaulting to a full download-then-process step,
@@ -154,10 +167,16 @@ report.
   gridded population dataset), joined to settlements.
 - **Damage-and-loss baseline** — derived from OSM building counts plus
   population, before any field reports arrive; this is the "prior" that
-  field reports will later update or override.
+  field reports will later update or override. Now also joined with GIK
+  needs reports when a snapshot exists (`pipeline.gik`), so the baseline
+  carries reported needs (`gik_reports`, `gik_households`, `gik_people`,
+  `gik_needs`) alongside the proxies.
 - **Field reports** — road status changes and damage/needs updates
   submitted by coordinators, stored in the external database, referencing
-  specific road segments or settlement units.
+  specific road segments or settlement units. The GIK snapshot is the
+  initial seed (`pipeline.field` writes `field_reports.ndjson`, loadable
+  with `mongoimport` or `python -m pipeline.field --import` when a local
+  MongoDB is up).
 - **Facility needs** — data on what each settlement needs (water,
   medical, shelter, etc.), attached to the settlement/admin-unit layer
   alongside population and building damage — not part of the road graph.
@@ -194,6 +213,15 @@ Two sub-steps, only the second of which is built so far:
 - placeholder aid-hub points (regency centroids — AGENTS.md never
   specified real hub locations; swap in real airstrip/port/warehouse
   coordinates once a coordinator supplies them)
+
+A third, optional, live step — `pipeline.gik` (fetched with
+`python -m pipeline.gik`, or `python -m pipeline.run --with-gik`) —
+pulls the UGM GIK field-report feed, clips it to the study area, and
+produces `gik_reports.geojson`; `pipeline.field` then normalises that
+snapshot into the field-report store seed (`field_reports.ndjson`). These
+are not part of the static base-data build (the feed changes as field
+reports arrive), so they run on demand, not in the default `run.py`
+sequence.
 
 To run locally first, before any server or database is involved. See
 [Lessons learned](#lessons-learned) for why each pipeline step runs as
@@ -322,6 +350,15 @@ were resolved — read this before repeating the same investigation.
   server at all — a static file server is still required, since browsers
   block `fetch()` of local files under `file://`. `python -m
   http.server` from the repo root is enough.
+- **A live external feed is a snapshot, not a dependency.** The UGM GIK
+  feed (`pipeline.gik`) changes as field reports arrive, so it must not
+  be part of the default static base-data build — it runs on demand
+  (`python -m pipeline.gik` / `--with-gik`). Everything downstream
+  (baseline join, web overlay, field-report seed) treats a missing GIK
+  snapshot as a graceful no-op, never a hard failure. Also note: DuckDB's
+  `SUM()` over BIGINT aggregates produces HUGEINT, which the GDAL
+  GeoJSON writer rejects (`Not implemented Error: Unsupported type for
+  OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
 
 ## Open notes / things not yet resolved
 

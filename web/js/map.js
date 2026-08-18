@@ -68,11 +68,13 @@ export class MapView {
    * @param {Function} [params.onRoadClick] (info) => void — road selected
    * @param {Function} [params.onHover]      (info|null) => void
    * @param {Function} [params.onEmptyClick] () => void — click not on road
+   * @param {Function} [params.onReady]      () => void — fired once layers are up
    */
-  constructor({ container, onRoadClick, onHover, onEmptyClick }) {
+  constructor({ container, onRoadClick, onHover, onEmptyClick, onReady }) {
     this._onRoadClick = onRoadClick;
     this._onHover = onHover;
     this._onEmptyClick = onEmptyClick;
+    this._onReady = onReady;
     this._sourceLoaded = false;
     this._selectedOsmId = null;
 
@@ -80,6 +82,8 @@ export class MapView {
       container,
       style: {
         version: 8,
+        // Public glyph server returning valid protobuf glyphs for the
+        // default "Open Sans Regular" stack (verified: HTTP 200 PBF).
         glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
         sources: {
           carto: {
@@ -104,11 +108,13 @@ export class MapView {
     settlementsGeojson,
     hubsGeojson,
     buildingsLayer,
+    gikGeojson,
   }) {
     this._roadsGeojson = roadsGeojson;
     this._settlementsGeojson = settlementsGeojson;
     this._hubsGeojson = hubsGeojson;
     this._buildingsLayer = buildingsLayer;
+    this._gikGeojson = gikGeojson;
 
     if (this.map.isStyleLoaded()) {
       this._onLoad();
@@ -192,6 +198,7 @@ export class MapView {
         source: "settlements",
         layout: {
           "text-field": ["get", "name"],
+          "text-font": ["Open Sans Regular"],
           "text-size": 9.5,
           "text-offset": [0, 0.8],
           "text-anchor": "top",
@@ -225,6 +232,7 @@ export class MapView {
         source: "hubs",
         layout: {
           "text-field": ["get", "kab_kota_name"],
+          "text-font": ["Open Sans Regular"],
           "text-size": 10,
           "text-offset": [0, 1.4],
           "text-anchor": "top",
@@ -237,8 +245,72 @@ export class MapView {
       });
     }
 
+    // GIK field reports (UGM Geoportal Informasi Kebencanaan) — optional.
+    if (this._gikGeojson?.features?.length) {
+      this.map.addSource("gik", {
+        type: "geojson",
+        data: this._gikGeojson,
+      });
+      this.map.addLayer({
+        id: "gik",
+        type: "circle",
+        source: "gik",
+        paint: {
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            7,
+            3.5,
+            12,
+            7,
+          ],
+          "circle-color": "#f2cc60",
+          "circle-opacity": 0.9,
+          "circle-stroke-width": 1.2,
+          "circle-stroke-color": "#0d1117",
+        },
+      });
+      this.map.addLayer({
+        id: "gik-labels",
+        type: "symbol",
+        source: "gik",
+        layout: {
+          "text-field": ["get", "households"],
+          "text-font": ["Open Sans Regular"],
+          "text-size": 9,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+        },
+        paint: {
+          "text-color": "#f2cc60",
+          "text-halo-color": "rgba(13,17,23,0.9)",
+          "text-halo-width": 1.2,
+        },
+      });
+      // Click a report to see its details.
+      this.map.on("click", "gik", (e) => {
+        const p = e.features?.[0]?.properties ?? {};
+        const html = `<div class="tt-title">${p.location || "GIK report"}</div>
+          <div class="tt-sub">${p.households ?? "?"} KK · ${p.people ?? "?"} people</div>
+          <div class="tt-sub">${p.needs || ""}</div>
+          <div class="tt-sub">${p.status || ""}${p.photo ? ` · <a href="https://geoportal.science/gik/uploads/${p.photo}" target="_blank" rel="noopener">photo</a>` : ""}</div>`;
+        new maplibregl.Popup({ closeButton: true, maxWidth: "280px" })
+          .setLngLat(e.lngLat)
+          .setHTML(html)
+          .addTo(this.map);
+      });
+      this.map.on("mouseenter", "gik", () => {
+        this.map.getCanvas().style.cursor = "pointer";
+      });
+      this.map.on("mouseleave", "gik", () => {
+        this.map.getCanvas().style.cursor = "";
+      });
+    }
+
     // Mark done — break-marks shown from the first recompute.
     this._sourceLoaded = true;
+    this._onReady?.();
   }
 
   /**
@@ -280,7 +352,7 @@ export class MapView {
     });
   }
 
-  /** Highigh a road by osm_id (from the sim panel selection). */
+  /** Highlight a road by osm_id (from the sim panel selection). */
   selectRoadByOsmId(osmId) {
     this._selectedOsmId = osmId;
     this._renderSelection();
@@ -338,6 +410,12 @@ export class MapView {
   /** Convenience: toggle break marker layer. */
   setBreakVisible(v) {
     this.setLayerVisibility("break-marks", v);
+  }
+
+  /** Convenience: toggle GIK field-report layer. */
+  setGikVisible(v) {
+    this.setLayerVisibility("gik", v);
+    this.setLayerVisibility("gik-labels", v);
   }
 
   fitFlores() {

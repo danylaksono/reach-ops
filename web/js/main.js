@@ -37,7 +37,8 @@ async function main() {
   ui.setStatus("Loading data…");
 
   // 1. Static layers
-  const { roads, settlements, hubs, baseline, boundary } = await loadAll();
+  const { roads, settlements, hubs, baseline, boundary, gik } =
+    await loadAll();
 
   // 2. wasm engine
   ui.setStatus("Building graph (wasm)…");
@@ -68,6 +69,14 @@ async function main() {
   state.baseline = baseline;
   state.targets = targets;
 
+  // GIK field reports (optional layer).
+  if (gik?.features?.length) {
+    ui.gikStatusEl.textContent = `${fmt(gik.features.length)} reports in study area`;
+  } else {
+    ui.gikStatusEl.textContent =
+      "No GIK snapshot found — run `python -m pipeline.gik` to fetch.";
+  }
+
   ui.setStatus(
     `Graph: ${fmt(engine.nodeCount())} nodes, ${fmt(engine.edgeCount())} edges — bootstrapping…`,
   );
@@ -89,12 +98,21 @@ async function main() {
       "Buildings layer unavailable — DuckDB-WASM failed to initialise.";
   }
 
-  // 4. Map
+  // 4. Map. `onReady` re-runs the initial recompute once the style has
+  // loaded and our layers exist — a very early `updatePieces` call would
+  // otherwise return early (source not added yet) and leave the road layer
+  // empty.
   const map = new MapView({
     container: mapContainer,
     onRoadClick: (info) => onRoadSelected(info),
     onHover: onHoverRoad,
     onEmptyClick: () => clearRoadSelection(),
+    onReady: () => {
+      if (state.lastResult) {
+        state.map?.updatePieces(state.lastResult.pieces);
+        state.map?.updateBreaks(state.lastResult.breaks);
+      }
+    },
   });
 
   map.initLayers({
@@ -102,6 +120,7 @@ async function main() {
     settlementsGeojson: settlements,
     hubsGeojson: hubs,
     buildingsLayer,
+    gikGeojson: gik,
   });
   state.map = map;
 
@@ -123,6 +142,9 @@ async function main() {
   recompute();
 
   // 7. Initial view
+  //    (after the first recompute, but before the map's style may have
+  //    loaded yet — the map's `onReady` hook re-applies the road pieces
+  //    once layers exist, so the early call is harmless.)
   if (boundary?.features?.[0]?.geometry?.coordinates) {
     map.fitFlores();
   }
@@ -331,6 +353,9 @@ function onToggleVisibility(name, visible) {
       break;
     case "break":
       state.map?.setBreakVisible(visible);
+      break;
+    case "gik":
+      state.map?.setGikVisible(visible);
       break;
   }
 }

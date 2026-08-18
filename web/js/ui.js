@@ -32,9 +32,11 @@ export class UI {
     this.toggleSettlements = document.getElementById("toggle-settlements");
     this.toggleHubs = document.getElementById("toggle-hubs");
     this.toggleBreak = document.getElementById("toggle-break");
+    this.toggleGik = document.getElementById("toggle-gik");
 
     this.buildingsStatusEl = document.getElementById("buildings-status");
     this.buildingsRemoteEl = document.getElementById("buildings-remote");
+    this.gikStatusEl = document.getElementById("gik-status");
   }
 
   setStatus(text) {
@@ -42,7 +44,7 @@ export class UI {
   }
 
   /** Wire up static controls (buttons, tabs, layer toggles). */
-  bindControls({ onBreak, onRestore, onReset, onToggle, onSort, onTab }) {
+  bindControls({ onBreak, onRestore, onReset, onToggleVisibility, onSort, onTab }) {
     this.breakBtn.addEventListener("click", onBreak);
     this.restoreBtn.addEventListener("click", onRestore);
     this.resetBtn.addEventListener("click", onReset);
@@ -54,12 +56,11 @@ export class UI {
       ["settlements", this.toggleSettlements],
       ["hubs", this.toggleHubs],
       ["break", this.toggleBreak],
+      ["gik", this.toggleGik],
     ];
     for (const [name, el] of toggles) {
       el.addEventListener("change", () => onToggleVisibility(name, el.checked));
     }
-
-    // Tabs
     document.querySelectorAll(".tab").forEach((tab) => {
       tab.addEventListener("click", () => {
         document

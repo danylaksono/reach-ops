@@ -11,14 +11,18 @@ export async function fetchJson(path) {
 
 /** Load all static layers used by the dashboard. */
 export async function loadAll() {
-  const [roads, settlements, hubs, baseline, boundary] = await Promise.all([
-    fetchJson(`${DATA_BASE}/roads.geojson`),
-    fetchJson(`${DATA_BASE}/settlements.geojson`),
-    fetchJson(`${DATA_BASE}/hubs.geojson`),
-    fetchJson(`${DATA_BASE}/baseline.geojson`),
-    fetchJson(`${DATA_BASE}/boundary.geojson`),
-  ]);
-  return { roads, settlements, hubs, baseline, boundary };
+  const [roads, settlements, hubs, baseline, boundary, gik] =
+    await Promise.all([
+      fetchJson(`${DATA_BASE}/roads.geojson`),
+      fetchJson(`${DATA_BASE}/settlements.geojson`),
+      fetchJson(`${DATA_BASE}/hubs.geojson`),
+      fetchJson(`${DATA_BASE}/baseline.geojson`),
+      fetchJson(`${DATA_BASE}/boundary.geojson`),
+      // GIK field reports are optional — the dashboard must boot without
+      // them (e.g. before pipeline.gik has been run).
+      fetchJson(`${DATA_BASE}/gik_reports.geojson`).catch(() => null),
+    ]);
+  return { roads, settlements, hubs, baseline, boundary, gik };
 }
 
 /** Rough centroid for GeoJSON Polygon/MultiPolygon (vertex-average). */
