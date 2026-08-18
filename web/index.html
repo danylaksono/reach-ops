@@ -1,135 +1,144 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
-  <title>Reach-Ops — Phase 1 engine smoke test</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
-    #status { color: #555; }
-    table { border-collapse: collapse; margin-top: 1rem; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 0.3rem 0.6rem; text-align: left; font-size: 0.9rem; }
-    th { background: #f0f0f0; }
-    .unreachable { color: #b00; font-weight: bold; }
-    button { margin: 0.5rem 0.5rem 0.5rem 0; padding: 0.4rem 0.8rem; }
-  </style>
-</head>
-<body>
-  <h1>Reach-Ops — Phase 1 engine smoke test</h1>
-  <p id="status">Loading…</p>
-
-  <div>
-    <button id="break-btn" disabled>Break a road near the first hub</button>
-    <button id="restore-btn" disabled>Restore it</button>
-  </div>
-
-  <table id="results">
-    <thead>
-      <tr><th>Settlement</th><th>Regency</th><th>Distance from nearest hub</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-
-  <script type="module">
-    import init, { Engine } from './pkg/reach_ops_engine.js';
-
-    const statusEl = document.getElementById('status');
-    const tbody = document.querySelector('#results tbody');
-    const breakBtn = document.getElementById('break-btn');
-    const restoreBtn = document.getElementById('restore-btn');
-
-    let engine, targets, hubs, brokenOsmId;
-
-    function metersLabel(m) {
-      if (m === null || m === undefined) return '<span class="unreachable">unreachable</span>';
-      return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
-    }
-
-    function render(results) {
-      const byId = new Map(results.map(r => [r.id, r.distance_m]));
-      const rows = targets
-        .map(t => ({ ...t, distance_m: byId.get(t.id) }))
-        .sort((a, b) => (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity))
-        .slice(0, 30);
-      tbody.innerHTML = rows
-        .map(r => `<tr><td>${r.name}</td><td>${r.kab_kota_name}</td><td>${metersLabel(r.distance_m)}</td></tr>`)
-        .join('');
-    }
-
-    function recompute() {
-      const resultsJson = engine.compute_reachability();
-      render(JSON.parse(resultsJson));
-    }
-
-    async function main() {
-      await init();
-
-      const [roadsGeojson, hubsGeojson, settlementsGeojson] = await Promise.all([
-        fetch('../data/flores/roads.geojson').then(r => r.text()),
-        fetch('../data/flores/hubs.geojson').then(r => r.json()),
-        fetch('../data/flores/settlements.geojson').then(r => r.json()),
-      ]);
-
-      statusEl.textContent = 'Building graph…';
-      engine = new Engine(roadsGeojson);
-
-      hubs = hubsGeojson.features.map(f => f.geometry.coordinates);
-      targets = settlementsGeojson.features.map(f => {
-        const [lon, lat] = centroidOfPolygon(f.geometry);
-        return { id: f.properties.code, name: f.properties.name, kab_kota_name: f.properties.kab_kota_name, lon, lat };
-      });
-
-      statusEl.textContent = 'Snapping hubs and settlements to the graph…';
-      engine.set_hubs(JSON.stringify(hubs));
-      engine.set_targets(JSON.stringify(targets.map(t => ({ id: t.id, lon: t.lon, lat: t.lat }))));
-
-      statusEl.textContent = `Loaded ${engine.node_count().toLocaleString()} nodes, ` +
-        `${engine.edge_count().toLocaleString()} edges, ${hubs.length} hubs, ${targets.length} settlements.`;
-
-      // Grab a road segment's osm_id near the first hub, for the break/restore demo.
-      const roads = JSON.parse(roadsGeojson);
-      const [hubLon, hubLat] = hubs[0];
-      let nearest = null, nearestDist = Infinity;
-      for (const f of roads.features) {
-        const [lon, lat] = f.geometry.coordinates[0];
-        const d = (lon - hubLon) ** 2 + (lat - hubLat) ** 2;
-        if (d < nearestDist) { nearestDist = d; nearest = f; }
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reach-Ops — Accessibility Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" crossorigin="anonymous" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "@duckdb/duckdb-wasm": "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/+esm"
       }
-      brokenOsmId = nearest.properties.osm_id;
-
-      breakBtn.disabled = false;
-      restoreBtn.disabled = false;
-      breakBtn.onclick = () => {
-        const n = engine.set_edge_status(brokenOsmId, false);
-        const t0 = performance.now();
-        recompute();
-        statusEl.textContent = `Marked osm_id ${brokenOsmId} broken (${n} graph edges affected). ` +
-          `Recomputed in ${(performance.now() - t0).toFixed(0)}ms.`;
-      };
-      restoreBtn.onclick = () => {
-        const n = engine.set_edge_status(brokenOsmId, true);
-        const t0 = performance.now();
-        recompute();
-        statusEl.textContent = `Restored osm_id ${brokenOsmId} (${n} graph edges affected). ` +
-          `Recomputed in ${(performance.now() - t0).toFixed(0)}ms.`;
-      };
-
-      recompute();
     }
-
-    // Rough polygon/multipolygon centroid — averages ring vertices, good
-    // enough for snap-to-nearest-node; not an area-weighted centroid.
-    function centroidOfPolygon(geometry) {
-      const rings = geometry.type === 'Polygon' ? geometry.coordinates : geometry.coordinates.flat();
-      const ring = rings[0];
-      let sx = 0, sy = 0;
-      for (const [x, y] of ring) { sx += x; sy += y; }
-      return [sx / ring.length, sy / ring.length];
-    }
-
-    main().catch(err => {
-      statusEl.textContent = `Error: ${err.message}`;
-      console.error(err);
-    });
   </script>
+</head>
+
+<body>
+  <header id="topbar">
+    <h1>Reach-Ops</h1>
+    <span class="tagline">Flores accessibility dashboard</span>
+    <span class="spacer"></span>
+    <span id="status" class="status">Bootstrapping…</span>
+    <button id="reset-btn" class="btn danger" disabled>Reset all</button>
+  </header>
+
+  <main id="layout">
+    <section id="map-wrap">
+      <div id="map"></div>
+
+      <!-- Map overlays -->
+      <div id="legend" class="panel">
+        <div class="panel-title">Accessibility</div>
+        <div class="legend-row"><span class="swatch swatch-reachable"></span>Reachable</div>
+        <div class="legend-row"><span class="swatch swatch-cutoff"></span>Unreachable downstream</div>
+        <div class="legend-row"><span class="swatch swatch-broken"></span>Broken (marked)</div>
+        <div class="legend-row"><span class="swatch swatch-hub"></span>Access hub</div>
+      </div>
+
+      <div id="tooltip" class="tooltip" hidden></div>
+
+      <div id="hud" class="hud">
+        <div id="hud-reach" class="hud-card"><span class="hud-value" id="reach-pct">—</span><span
+            class="hud-label">settlements reached</span></div>
+        <div class="hud-card"><span class="hud-value" id="pop-pct">—</span><span class="hud-label">population
+            reached</span></div>
+        <div class="hud-card"><span class="hud-value" id="road-broken">0</span><span class="hud-label">roads
+            broken</span></div>
+        <div class="hud-card"><span class="hud-value" id="recompute-ms">—</span><span class="hud-label">recompute</span>
+        </div>
+      </div>
+
+      <div id="sim-panel" class="panel">
+        <div class="panel-title">Spatial Intervention Loop</div>
+        <div class="sim-stage">
+          <span class="stage-idx">1</span>
+          <span>Pick a road on the map to simulate a failure</span>
+        </div>
+        <div class="sim-stage">
+          <span class="stage-idx">2</span>
+          <span>Watch reachability & settlement cutoff recompute</span>
+        </div>
+        <div class="sim-stage">
+          <span class="stage-idx">3</span>
+          <span>Restore the road to model relief</span>
+        </div>
+        <div class="sim-selected" id="sim-selected">No road selected.</div>
+        <div class="sim-actions">
+          <button id="break-btn" class="btn danger" disabled>Mark broken</button>
+          <button id="restore-btn" class="btn ok" disabled>Restore</button>
+        </div>
+      </div>
+    </section>
+
+    <aside id="sidebar">
+      <div class="tabs">
+        <button class="tab active" data-tab="layers">Layers</button>
+        <button class="tab" data-tab="data">Data</button>
+        <button class="tab" data-tab="about">About</button>
+      </div>
+
+      <div class="tab-body active" id="tab-layers">
+        <h3>Map layers</h3>
+        <label class="switch-row"><input type="checkbox" id="toggle-roads" checked /><span>Accessibility
+            roads</span></label>
+        <label class="switch-row"><input type="checkbox" id="toggle-buildings" /><span>Buildings
+            <small>(DuckDB)</small></span></label>
+        <label class="switch-row"><input type="checkbox" id="toggle-settlements"
+            checked /><span>Settlements</span></label>
+        <label class="switch-row"><input type="checkbox" id="toggle-hubs" checked /><span>Access hubs</span></label>
+        <label class="switch-row"><input type="checkbox" id="toggle-break" checked /><span>Break layer</span></label>
+
+        <h3>Settlement view</h3>
+        <label>Sort by <select id="settle-sort">
+            <option value="cutoff">Highest risk (cutoff first)</option>
+            <option value="need">Highest need</option>
+            <option value="name">Name</option>
+          </select></label>
+        <div id="settle-list" class="settle-list"></div>
+      </div>
+
+      <div class="tab-body" id="tab-data">
+        <section>
+          <h3>Your local map</h3>
+          <p class="muted">Serve from repo root so the browser can fetch
+            <code>data/flores/*.geojson</code>.
+          </p>
+          <pre>uv run python -m http.server 8731</pre>
+          <p class="muted">Then open <a href="http://localhost:8731/web/">http://localhost:8731/web/</a></p>
+        </section>
+        <section id="buildings-section">
+          <h3>Buildings & fields</h3>
+          <p id="buildings-status" class="muted">Querying local buildings via DuckDB-WASM…</p>
+          <p id="buildings-remote" class="muted" hidden>Remote Source.coop buildings (cloud-native, DuckDB
+            <code>httpfs</code>) also available — region query below.
+          </p>
+          <div class="buildings-legend">
+            <span><i class="dot" style="background:#4db8ff"></i>up to 520 buildings</span>
+            <span><i class="dot" style="background:#f68f7f"></i>520–2300</span>
+            <span><i class="dot" style="background:#d0453c"></i>over 2300</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="tab-body" id="tab-about">
+        <h3>About</h3>
+        <section>
+          <p class="muted">Reach-Ops is a prototype disaster-response accessibility dashboard for the 15 August 2026
+            Flores earthquake.</p>
+          <p class="muted">Built on OSM roads + Kontur population + DuckDB-WASM, with a Rust/petgraph engine in the
+            browser. Accessibility is measured from aid hubs via a multi-source Dijkstra; broken roads cut off the
+            network downstream.</p>
+          <p class="muted">Hubs are placeholder regency centroids — swap in real airstrip/port/warehouse coordinates
+            when a coordinator supplies them.</p>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
 </body>
+
 </html>

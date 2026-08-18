@@ -2,7 +2,7 @@ pub mod graph;
 pub mod reachability;
 mod spatial_index;
 
-use graph::RoadGraph;
+use graph::{FeatureComputed, RoadGraph};
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -14,10 +14,29 @@ struct TargetPoint {
     lat: f64,
 }
 
-#[derive(Serialize)]
-struct ReachabilityResult {
+#[derive(Serialize, Clone)]
+struct SettlementResult {
     id: String,
     distance_m: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct RoadResult {
+    reachable: u32,
+    broken: u32,
+    total: u32,
+}
+
+impl From<FeatureComputed> for RoadResult {
+    fn from(f: FeatureComputed) -> Self {
+        RoadResult { reachable: f.reachable, broken: f.broken, total: f.total }
+    }
+}
+
+#[derive(Serialize)]
+struct StateResult {
+    settlements: Vec<SettlementResult>,
+    roads: Vec<RoadResult>,
 }
 
 /// Loads a road network once and answers repeated reachability queries as
@@ -50,6 +69,10 @@ impl Engine {
 
     pub fn edge_count(&self) -> usize {
         self.rg.edge_count()
+    }
+
+    pub fn feature_count(&self) -> usize {
+        self.rg.feature_count()
     }
 
     /// Mark every graph edge derived from an OSM way as broken/restored.
@@ -91,15 +114,94 @@ impl Engine {
     pub fn compute_reachability(&self) -> Result<String, JsValue> {
         let dist = reachability::multi_source_distances(&self.rg, &self.hub_nodes);
 
-        let results: Vec<ReachabilityResult> = self
+        let results: Vec<SettlementResult> = self
             .target_nodes
             .iter()
-            .map(|(id, node)| ReachabilityResult {
+            .map(|(id, node)| SettlementResult {
                 id: id.clone(),
                 distance_m: node.and_then(|n| dist.get(&n).copied()),
             })
             .collect();
 
         serde_json::to_string(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// One-shot full state for the dashboard: settlement reachability
+    /// (same shape as `compute_reachability`) plus per-road-feature state
+    /// so each map line can be coloured by reachable/broken/unreachable.
+    ///
+    /// Returns JSON:
+    /// {"settlements":[{"id","distance_m"}...],
+    ///  "roads":[{"reachable","broken","total"}...]}
+    ///
+    /// `roads` is indexed by feature order in the input roads GeoJSON;
+    /// `distance_m` is null when a settlement is unreachable from every hub.
+    pub fn compute_state(&self) -> Result<String, JsValue> {
+        let dist = reachability::multi_source_distances(&self.rg, &self.hub_nodes);
+
+        let settlements: Vec<SettlementResult> = self
+            .target_nodes
+            .iter()
+            .map(|(id, node)| SettlementResult {
+                id: id.clone(),
+                distance_m: node.and_then(|n| dist.get(&n).copied()),
+            })
+            .collect();
+
+        let roads: Vec<RoadResult> =
+            self.rg.feature_states(&dist).into_iter().map(Into::into).collect();
+
+        let result = StateResult { settlements, roads };
+        serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_geojson() -> &'static str {
+        r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {"properties": {"osm_id": 1, "oneway": "yes"}, "geometry": {"type": "LineString", "coordinates": [[0.0, 0.0], [0.001, 0.0]]}}
+            ]
+        }"#
+    }
+
+    #[test]
+    fn settlement_result_shape_is_serializable() {
+        let s = SettlementResult { id: "x".into(), distance_m: Some(12.5) };
+        let js = serde_json::to_string(&s).unwrap();
+        assert_eq!(js, r#"{"id":"x","distance_m":12.5}"#);
+    }
+
+    #[test]
+    fn compute_state_serializes_settlements_and_roads() {
+        let mut e = Engine::new(sample_geojson()).unwrap();
+        e.set_hubs("[[0.0, 0.0]]").unwrap();
+        e.set_targets(r#"[{"id": "s1", "lon": 0.001, "lat": 0.0}]"#).unwrap();
+        let s = e.compute_state().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["settlements"][0]["id"], "s1");
+        assert_eq!(v["roads"].as_array().unwrap().len(), 1);
+        assert_eq!(v["roads"][0]["total"], 1);
+        assert_eq!(v["roads"][0]["broken"], 0);
+    }
+
+    #[test]
+    fn breaking_edge_marks_road_broken_and_far_end_unreachable() {
+        let mut e = Engine::new(sample_geojson()).unwrap();
+        e.set_hubs("[[0.0, 0.0]]").unwrap();
+        e.set_targets(r#"[{"id": "far", "lon": 0.001, "lat": 0.0}]"#).unwrap();
+
+        let before = serde_json::from_str::<serde_json::Value>(&e.compute_state().unwrap()).unwrap();
+        assert_eq!(before["roads"][0]["broken"], 0);
+        assert!(before["settlements"][0]["distance_m"].is_number());
+
+        e.set_edge_status(1.0, false);
+        let after = serde_json::from_str::<serde_json::Value>(&e.compute_state().unwrap()).unwrap();
+        assert_eq!(after["roads"][0]["broken"], 1);
+        assert!(after["settlements"][0]["distance_m"].is_null());
     }
 }

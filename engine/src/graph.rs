@@ -7,6 +7,10 @@
 //! which is safe here because the extraction upstream (DuckDB spatial,
 //! no reprojection) preserves OSM's literal shared node coordinates —
 //! verified separately (~21% of endpoints are shared by 2+ segments).
+//!
+//! Feature identity is also preserved: each GeoJSON feature is a road
+//! segment as drawn on a map, so the web dashboard can colour it as
+//! reachable/broken/unreachable after each recompute.
 
 use std::collections::HashMap;
 
@@ -28,10 +32,25 @@ pub struct EdgeData {
     pub passable: bool,
 }
 
+/// Per-feature state for visualising the road network.
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureComputed {
+    /// Number of coordinate-pair segments of this feature that are
+    /// reachable from a hub through currently-passable edges.
+    pub reachable: u32,
+    /// Number where none of the underlying graph edges are passable.
+    pub broken: u32,
+    /// Total coordinate-pair segments.
+    pub total: u32,
+}
+
 pub struct RoadGraph {
     pub(crate) graph: DiGraph<NodeData, EdgeData>,
     edges_by_osm_id: HashMap<i64, Vec<EdgeIndex>>,
     spatial_index: SpatialIndex,
+    /// Per feature: one entry per coordinate-pair segment; each entry lists
+    /// the graph edges for that segment (1 for oneway, 2 for two-way).
+    feature_segments: Vec<Vec<Vec<EdgeIndex>>>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +116,7 @@ impl RoadGraph {
         let mut graph = DiGraph::new();
         let mut node_index: HashMap<String, NodeIndex> = HashMap::new();
         let mut edges_by_osm_id: HashMap<i64, Vec<EdgeIndex>> = HashMap::new();
+        let mut feature_segments: Vec<Vec<Vec<EdgeIndex>>> = Vec::new();
 
         for feature in fc.features {
             if feature.geometry.geom_type != "LineString" {
@@ -110,6 +130,9 @@ impl RoadGraph {
                     || oneway.eq_ignore_ascii_case("yes")
                     || oneway.eq_ignore_ascii_case("true"));
 
+            let mut segs: Vec<Vec<EdgeIndex>> = Vec::with_capacity(
+                feature.geometry.coordinates.len().saturating_sub(1).max(0),
+            );
             for pair in feature.geometry.coordinates.windows(2) {
                 let [lon_a, lat_a] = pair[0];
                 let [lon_b, lat_b] = pair[1];
@@ -117,23 +140,30 @@ impl RoadGraph {
                 let b = get_or_add_node(&mut graph, &mut node_index, lon_b, lat_b);
                 let length_m = haversine_m((lon_a, lat_a), (lon_b, lat_b));
 
+                let mut seg_edges = Vec::with_capacity(2);
                 if reversed {
                     let e = graph.add_edge(b, a, EdgeData { osm_id, length_m, passable: true });
                     edges_by_osm_id.entry(osm_id).or_default().push(e);
+                    seg_edges.push(e);
                 } else if forward_only {
                     let e = graph.add_edge(a, b, EdgeData { osm_id, length_m, passable: true });
                     edges_by_osm_id.entry(osm_id).or_default().push(e);
+                    seg_edges.push(e);
                 } else {
                     let e1 = graph.add_edge(a, b, EdgeData { osm_id, length_m, passable: true });
                     let e2 = graph.add_edge(b, a, EdgeData { osm_id, length_m, passable: true });
                     edges_by_osm_id.entry(osm_id).or_default().push(e1);
                     edges_by_osm_id.entry(osm_id).or_default().push(e2);
+                    seg_edges.push(e1);
+                    seg_edges.push(e2);
                 }
+                segs.push(seg_edges);
             }
+            feature_segments.push(segs);
         }
 
         let spatial_index = SpatialIndex::build(&graph);
-        Ok(RoadGraph { graph, edges_by_osm_id, spatial_index })
+        Ok(RoadGraph { graph, edges_by_osm_id, spatial_index, feature_segments })
     }
 
     /// Mark every graph edge derived from `osm_id` as broken/restored.
@@ -149,6 +179,45 @@ impl RoadGraph {
             }
         }
         n
+    }
+
+    /// Per-feature (GeoJSON feature index) road state given a Dijkstra
+    /// distance map: how many segments are reachable, broken, or total.
+    ///
+    /// A segment is:
+    /// - broken if every graph edge of the segment is currently passable=false;
+    /// - reachable otherwise if at least one endpoint node is in `dist`.
+    pub fn feature_states(
+        &self,
+        dist: &HashMap<NodeIndex, f64>,
+    ) -> Vec<FeatureComputed> {
+        self.feature_segments
+            .iter()
+            .map(|segments| {
+                let mut reachable = 0u32;
+                let mut broken = 0u32;
+                for seg in segments {
+                    let passable_count =
+                        seg.iter().filter(|&&e| self.graph[e].passable).count();
+                    if passable_count == 0 {
+                        broken += 1;
+                        continue;
+                    }
+                    let has_reachable_end = seg.iter().any(|&e| {
+                        let (u, v) = self.graph.edge_endpoints(e).unwrap();
+                        dist.contains_key(&u) || dist.contains_key(&v)
+                    });
+                    if has_reachable_end {
+                        reachable += 1;
+                    }
+                }
+                FeatureComputed { reachable, broken, total: segments.len() as u32 }
+            })
+            .collect()
+    }
+
+    pub fn feature_count(&self) -> usize {
+        self.feature_segments.len()
     }
 
     /// Nearest graph node to an arbitrary point, via the grid spatial index.
@@ -202,5 +271,36 @@ mod tests {
         assert_eq!(n, 1);
         let still_passable = rg.graph.edge_weights().filter(|e| e.osm_id == 1).all(|e| e.passable);
         assert!(still_passable);
+    }
+
+    #[test]
+    fn feature_state_reflects_broken_and_reachable() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {"properties": {"osm_id": 1, "oneway": "yes"}, "geometry": {"type": "LineString", "coordinates": [[0.0, 0.0], [0.001, 0.0]]}},
+                {"properties": {"osm_id": 2, "oneway": "yes"}, "geometry": {"type": "LineString", "coordinates": [[0.001, 0.0], [0.002, 0.0]]}},
+                {"properties": {"osm_id": 3, "oneway": "yes"}, "geometry": {"type": "LineString", "coordinates": [[0.002, 0.0], [0.003, 0.0]]}}
+            ]
+        }"#;
+        let mut rg = RoadGraph::from_geojson(json).unwrap();
+        let a = rg.nearest_node(0.0, 0.0).unwrap();
+        let c = rg.nearest_node(0.002, 0.0).unwrap();
+
+        let dist_before = crate::reachability::multi_source_distances(&rg, &[a]);
+        let states_before = rg.feature_states(&dist_before);
+        assert_eq!(states_before[0].reachable, 1);
+        assert_eq!(states_before[0].broken, 0);
+        // feature 2 is connected via the junction (0.001 is reachable)
+        assert_eq!(states_before[1].reachable, 1);
+
+        // Break the middle feature entirely -> feature 3 unreachable.
+        rg.set_passable(2, false);
+        let dist_after = crate::reachability::multi_source_distances(&rg, &[a]);
+        let states_after = rg.feature_states(&dist_after);
+        assert_eq!(states_after[1].broken, 1);
+        assert_eq!(states_after[1].reachable, 0);
+        assert_eq!(states_after[2].reachable, 0);
+        let _ = c;
     }
 }
