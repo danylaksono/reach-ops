@@ -5,9 +5,10 @@
 //   basemap      dark CARTO raster tiles (no API key)
 //   buildings    per-settlement building-count choropleth (duckdb.js)
 //   settlements  settlement polygons + labels
-//   roads        accessibility-coloured road network (dynamic status)
+//   road-pieces  accessibility-coloured road *pieces* (dynamic status)
+//   break-marks  point-break markers (split-at-break-point)
 //   hubs         access hub points
-//   selected     white highlight for the clicked road
+//   selected     white highlight for the selected road
 //
 // Clicking a road selects it and fires onRoadClick().
 
@@ -16,13 +17,12 @@ import maplibregl from "https://esm.sh/maplibre-gl@4.7.1?bundle";
 const DARK_BASEMAP_URL =
   "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 
-/** MapLibre style fragment for the accessibility roads layer. */
-function roadStyle() {
+/** MapLibre style fragment for the accessibility road pieces layer. */
+function pieceStyle() {
   return {
-    id: "roads",
+    id: "road-pieces",
     type: "line",
-    source: "roads",
-    layout: { "line-cap": "round", "line-join": "round" },
+    source: "road-pieces",
     paint: {
       "line-color": [
         "case",
@@ -30,16 +30,14 @@ function roadStyle() {
         "#d0453c",
         ["==", ["get", "access_status"], "unreachable"],
         "#b25a3b",
-        ["==", ["get", "access_status"], "reachable"],
-        "#4f9e46",
-        "#9b9b9b", // default / unknown
+        "#4f9e46", // reachable (default)
       ],
       "line-width": [
         "interpolate",
         ["linear"],
         ["zoom"],
         8,
-        0.6,
+        0.9,
         12,
         [
           "case",
@@ -55,10 +53,10 @@ function roadStyle() {
           1.4,
           ["==", ["get", "highway"], "residential"],
           1.0,
-          0.8,
+          0.6,
         ],
       ],
-      "line-opacity": 0.9,
+      "line-opacity": 0.92,
     },
   };
 }
@@ -66,10 +64,10 @@ function roadStyle() {
 export class MapView {
   /**
    * @param {Object} params
-   * @param {HTMLElement} params.container   map mount div
-   * @param {Function} [params.onRoadClick]  (info) => void — road selected
+   * @param {HTMLElement} params.container  map mount div
+   * @param {Function} [params.onRoadClick] (info) => void — road selected
    * @param {Function} [params.onHover]      (info|null) => void
-   * @param {Function} [params.onEmptyClick] () => void — click not on a road
+   * @param {Function} [params.onEmptyClick] () => void — click not on road
    */
   constructor({ container, onRoadClick, onHover, onEmptyClick }) {
     this._onRoadClick = onRoadClick;
@@ -82,8 +80,6 @@ export class MapView {
       container,
       style: {
         version: 8,
-        // Public no-key glyph server so symbol layers (settlement/hub labels)
-        // can render text without a MapTiler token or self-hosted fonts.
         glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
         sources: {
           carto: {
@@ -94,7 +90,7 @@ export class MapView {
         },
         layers: [{ id: "basemap", type: "raster", source: "carto" }],
       },
-      center: [121.2, -8.45], // Flores island
+      center: [121.2, -8.45],
       zoom: 7.5,
       attributionControl: true,
     });
@@ -122,12 +118,30 @@ export class MapView {
   }
 
   _onLoad() {
-    // Roads (bottom-most vector layer; drawn under settlements but above
-    // buildings so the accessibility picture stays on top).
-    this.map.addSource("roads", { type: "geojson", data: this._roadsGeojson });
-    this.map.addLayer(roadStyle());
+    // Road pieces (initialised empty; populated on first recompute).
+    this.map.addSource("road-pieces", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+    this.map.addLayer(pieceStyle());
 
-    // Award settlements / building density layer (optional buildings at top).
+    // Break marker circles.
+    this.map.addSource("break-marks", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+    this.map.addLayer({
+      id: "break-marks",
+      type: "circle",
+      source: "break-marks",
+      paint: {
+        "circle-radius": 7,
+        "circle-color": "#d0453c",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ffffff",
+      },
+    });
+
     // Buildings layer: per-settlement building count choropleth.
     if (this._buildingsLayer) {
       this.map.addSource("buildings", {
@@ -223,28 +237,50 @@ export class MapView {
       });
     }
 
+    // Mark done — break-marks shown from the first recompute.
     this._sourceLoaded = true;
   }
 
-  /** Apply per-feature access_status from the engine's road state. */
-  updateStatus(roadsStatus) {
-    if (!this._sourceLoaded || !this.map.getSource("roads")) return;
-    const data = JSON.parse(JSON.stringify(this._roadsGeojson));
-    for (let i = 0; i < data.features.length; i++) {
-      const s = roadsStatus[i];
-      if (!s) continue;
-      const isBroken = s.broken === s.total && s.total > 0;
-      const isReachable = s.reachable > 0;
-      data.features[i].properties.access_status = isBroken
-        ? "broken"
-        : isReachable
-          ? "reachable"
-          : "unreachable";
-    }
-    this.map.getSource("roads").setData(data);
+  /**
+   * Replace the road layer with per-piece features (one line per piece).
+   */
+  updatePieces(pieces) {
+    if (!this._sourceLoaded || !this.map.getSource("road-pieces")) return;
+    const feats = pieces.map((p) => {
+      const road = this._roadsGeojson?.features?.[p.feature];
+      const props = road?.properties ?? {};
+      return {
+        type: "Feature",
+        properties: {
+          access_status: p.reachable ? "reachable" : "unreachable",
+          highway: props.highway ?? "",
+          name: props.name ?? "",
+          osm_id: props.osm_id ?? 0,
+        },
+        geometry: { type: "LineString", coordinates: p.coords },
+      };
+    });
+    this.map.getSource("road-pieces").setData({
+      type: "FeatureCollection",
+      features: feats,
+    });
   }
 
-  /** Highlight a road by osm_id (from the sim panel selection). */
+  /** Update the break-marker layer from the engine's breaks(). */
+  updateBreaks(breaks) {
+    if (!this._sourceLoaded || !this.map.getSource("break-marks")) return;
+    const feats = breaks.map((b) => ({
+      type: "Feature",
+      properties: { id: b.id, osm_id: b.osm_id },
+      geometry: { type: "Point", coordinates: [b.lon, b.lat] },
+    }));
+    this.map.getSource("break-marks").setData({
+      type: "FeatureCollection",
+      features: feats,
+    });
+  }
+
+  /** Highigh a road by osm_id (from the sim panel selection). */
   selectRoadByOsmId(osmId) {
     this._selectedOsmId = osmId;
     this._renderSelection();
@@ -294,9 +330,14 @@ export class MapView {
     }
   }
 
-  /** Convenience: toggle accessibility roads layer. */
+  /** Convenience: toggle accessibility road pieces. */
   setRoadsVisible(v) {
-    this.setLayerVisibility("roads", v);
+    this.setLayerVisibility("road-pieces", v);
+  }
+
+  /** Convenience: toggle break marker layer. */
+  setBreakVisible(v) {
+    this.setLayerVisibility("break-marks", v);
   }
 
   fitFlores() {
@@ -314,10 +355,10 @@ export class MapView {
   _bindEvents() {
     this.map.on("click", (e) => {
       const feats = this.map.queryRenderedFeatures(e.point, {
-        layers: ["roads"],
+        layers: ["road-pieces"],
       });
       if (feats.length > 0) {
-        this._selectRoad(feats[0]);
+        this._selectRoad(feats[0], e.lngLat);
       } else {
         this.clearSelection();
         this._onEmptyClick?.();
@@ -326,7 +367,7 @@ export class MapView {
 
     this.map.on("mousemove", (e) => {
       const feats = this.map.queryRenderedFeatures(e.point, {
-        layers: ["roads"],
+        layers: ["road-pieces"],
       });
       this.map.getCanvas().style.cursor = feats.length > 0 ? "pointer" : "";
       this._onHover?.(feats.length > 0 ? feats[0] : null, e);
@@ -335,7 +376,7 @@ export class MapView {
     this.map.on("mouseleave", () => this._onHover?.(null, null));
   }
 
-  _selectRoad(feat) {
+  _selectRoad(feat, lngLat = null) {
     const p = feat.properties ?? {};
     this._selectedOsmId = p.osm_id ?? null;
     this._renderSelection();
@@ -345,6 +386,8 @@ export class MapView {
       highway: p.highway,
       name: p.name,
       status: p.access_status,
+      lon: lngLat?.lng,
+      lat: lngLat?.lat,
     });
   }
 }

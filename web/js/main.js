@@ -139,29 +139,41 @@ function recompute() {
   const ms = performance.now() - t0;
   state.lastResult = result;
 
-  // Map road colouring
-  state.map?.updateStatus(result.roads);
+  // Map road colouring — per-piece (a point break keeps the near side of a
+  // long way green while the far side goes dark) + break markers.
+  state.map?.updatePieces(result.pieces);
+  state.map?.updateBreaks(result.breaks);
 
   // HUD
   ui.updateHud({
     reachPct: settlementStats(result),
     popPct: populationStats(result),
-    brokenCount: state.engine.broken.size,
+    brokenCount: state.engine.breakCount() + state.engine.broken.size,
     recomputeMs: ms,
   });
 
   // Settlement list
   renderSettlements();
 
-  // Sync sim panel with computed status
+  // Sync sim panel with computed status. A point break shows as broken even
+  // though the feature state may still be "reachable" (the near side stays
+  // usable) — prefer the active break over the whole-feature state.
   if (state.selectedRoad) {
-    const idx = state.roads.features.findIndex(
-      (f) => f.properties?.osm_id === state.selectedRoad.osm_id,
-    );
-    const status = idx >= 0 ? statusFrom(result.roads[idx]) : null;
-    if (status && status !== state.selectedRoad.status) {
-      state.selectedRoad.status = status;
+    const osmId = state.selectedRoad.osm_id;
+    const roadBreak = (result.breaks ?? []).find((b) => b.osm_id === osmId);
+    if (roadBreak) {
+      state.selectedRoad.pointBreakId = roadBreak.id;
+      state.selectedRoad.status = "broken";
       ui.setSimSelected(state.selectedRoad);
+    } else {
+      const idx = state.roads.features.findIndex(
+        (f) => f.properties?.osm_id === osmId,
+      );
+      const status = idx >= 0 ? statusFrom(result.roads[idx]) : null;
+      if (status && status !== state.selectedRoad.status) {
+        state.selectedRoad.status = status;
+        ui.setSimSelected(state.selectedRoad);
+      }
     }
   }
 
@@ -242,7 +254,16 @@ function onRoadSelected(info) {
   );
   const status =
     idx >= 0 ? statusFrom(state.lastResult?.roads?.[idx]) : info.status;
-  state.selectedRoad = { ...info, status };
+  // Resolve an active point break on this road (if any), so restoring works
+  // even after re-selecting the same road.
+  const roadBreak = state.lastResult?.breaks?.find(
+    (b) => b.osm_id === info.osm_id,
+  );
+  state.selectedRoad = {
+    ...info,
+    status,
+    pointBreakId: roadBreak?.id,
+  };
   ui.setSimSelected(state.selectedRoad);
 }
 
@@ -253,21 +274,36 @@ function clearRoadSelection() {
 }
 
 function onBreakSelected() {
-  if (!state.selectedRoad?.osm_id) return;
-  const n = state.engine.breakRoad(state.selectedRoad.osm_id);
-  state.selectedRoad.status = "broken";
-  ui.setSimSelected(state.selectedRoad);
-  ui.setStatus(`Marked OSM ${state.selectedRoad.osm_id} broken (${n} edges)…`);
-  recompute();
+  const road = state.selectedRoad;
+  if (!road?.osm_id) return;
+  try {
+    const breakId = state.engine.breakAt(road.lon, road.lat);
+    road.pointBreakId = breakId;
+    road.status = "broken";
+    ui.setSimSelected(road);
+    ui.setStatus(`Marked OSM ${road.osm_id} broken at the clicked point.`);
+    recompute();
+  } catch (e) {
+    ui.setStatus(`Break failed: ${e.message}`);
+  }
 }
 
 function onRestoreSelected() {
-  if (!state.selectedRoad?.osm_id) return;
-  const n = state.engine.restoreRoad(state.selectedRoad.osm_id);
-  state.selectedRoad.status = "reachable";
-  ui.setSimSelected(state.selectedRoad);
-  ui.setStatus(`Restored OSM ${state.selectedRoad.osm_id} (${n} edges)…`);
-  recompute();
+  const road = state.selectedRoad;
+  if (!road?.osm_id) return;
+  let restored = false;
+  if (road.pointBreakId) {
+    restored = state.engine.restoreBreak(road.pointBreakId);
+    if (restored) road.pointBreakId = null;
+  } else {
+    restored = state.engine.restoreRoad(road.osm_id) > 0;
+  }
+  if (restored) {
+    road.status = "reachable";
+    ui.setSimSelected(road);
+    ui.setStatus(`Restored OSM ${road.osm_id}.`);
+    recompute();
+  }
 }
 
 function onResetAll() {
@@ -294,7 +330,7 @@ function onToggleVisibility(name, visible) {
       state.map.setLayerVisibility("hub-labels", visible);
       break;
     case "break":
-      ui.setStatus(visible ? "Break layer shown" : "Break layer hidden");
+      state.map?.setBreakVisible(visible);
       break;
   }
 }
