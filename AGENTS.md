@@ -257,6 +257,93 @@ logic that:
   settlement's priority (need) and its cutoff (accessibility) are visible
   together
 
+### Phase 3 — Operational dashboard interface
+
+**Status: layout revamp built.** The original `web/` UI was a single-view
+accessibility instrument (one map, one HUD strip, one sim panel, a 3-tab
+sidebar) that read as an accessibility-engine demo, not an operational
+dashboard. It's been rebuilt as a React + TypeScript + Vite app (Zustand
+for shared state, TanStack Table for the priority list, Radix +
+class-variance-authority UI primitives in the shadcn idiom rather than
+shadcn's default theme, Tailwind v4, IBM Plex type) — see the "Dashboard
+(web/)" section in README.md for the run command and file layout. The
+plan below (informed by a short study of EOC/incident-dashboard practice,
+the DALA/PDNA methodology, and humanitarian logistics-cluster GIS
+practice) is marked done/pending per item; treat this as the current
+state, not just a proposal.
+
+- **DALA (Damage and Loss Assessment) layer — thin, explicit proxy, not
+  full PDNA.** Real DALA (UN-ECLAC/GFDRR methodology) organises impact
+  into sectors (social: housing/education/health; infrastructure:
+  energy/water/transport; economic: agriculture/trade/tourism) and
+  distinguishes *damage* (replacement cost of destroyed/damaged assets)
+  from *loss* (disrupted flows — lost production/income/access) —
+  Post-Disaster Needs Assessment (PDNA) adds a recovery-needs layer on
+  top. Full macroeconomic loss modelling is out of scope here — decided:
+  build a lightweight severity-proxy layer instead (using what's
+  actually available: GIK reports + OSM building counts + Kontur
+  population), and say so explicitly in the UI rather than imply
+  PDNA-grade rigour. Useful realisation: the existing road-break state
+  already **is** the DALA transport-infrastructure-damage layer, and
+  `baseline.geojson` already **is** a proxy for the housing/social
+  sector — DALA is mostly the existing baseline reorganised into the
+  standard sector taxonomy, plus a severity dimension (destroyed / major
+  / minor) that field reports don't currently carry and would need to
+  add. **Decision: DALA sector data lives on its own report page**
+  (matches how PDNA output is inherently tabular/report-shaped, not a
+  map layer), not as an overlay bolted onto the accessibility map. —
+  **Done**: `DalaView` (`web/src/components/views/DalaView.tsx`) is built
+  as an honest not-yet-computed state (what proxy each sector will use,
+  what's missing) rather than fake data; the severity choropleth overlay
+  and sector table itself are still pending the severity field described
+  above.
+- **Information architecture: split into coordinated views, not one
+  map trying to encode everything.** — **Done**: three views behind a nav
+  rail (`web/src/components/NavRail.tsx`), switched via
+  `useDashboardStore`'s `view` state.
+  - *Overview* (`OverviewView.tsx`) — KPI tiles (settlements cut off,
+    population affected, roads broken, buildings surveyed) + the same
+    priority list — the "walk in and see the situation in 5 seconds"
+    screen. The H3 density overview map (prior Open notes entry) is not
+    built yet — Overview currently reuses the existing population/
+    building aggregates, not an H3 layer.
+  - *Accessibility* (`MapCanvas.tsx` + `RightPanel.tsx`) — today's map,
+    kept as its own view so it isn't cluttered with damage data an
+    operator didn't ask for. Reframing toward the logistics-cluster
+    "access constraints map" convention (explicit passability/closure
+    styling) is a visual-polish item, not yet done beyond the existing
+    reachable/cutoff/broken colouring.
+  - *Damage & Loss (DALA)* — see above; report page built, sector data
+    itself pending.
+  - A single ranked priority/triage list — **done** as
+    `useSettlementRows()` (`web/src/lib/useSettlementRows.ts`), reused by
+    both the Accessibility sidebar's Priority tab and Overview. Still
+    need-only (population + cutoff); folding in a DALA sector score once
+    that exists is the next step, not a DuckDB SQL rewrite — it's a small
+    TS module today, not worth moving into SQL until the join gets
+    genuinely relational (multiple sector tables).
+- **KPI strip stays secondary to the map.** — **Done**:
+  `TelemetryStrip.tsx` is a thin instrument-readout strip (not stat
+  cards), shown only in the Accessibility view; Overview gets its own
+  larger KPI tiles since being KPI-forward is its whole point.
+- **Fullscreen map toggle.** — **Done**: `fullscreen` state in the store,
+  collapses top bar/nav rail/right panel/telemetry strip to a minimal
+  corner HUD (`FullscreenHud.tsx`).
+- **Brush-linking across coordinated views.** — **Not done.** The map
+  now stays mounted across every view switch (visibility toggle, not
+  remount — see `MapCanvas.tsx`) specifically so this is buildable
+  without a rearchitecture later, but no cross-view highlight wiring
+  exists yet beyond the Priority list's "click a row → fly the map to
+  it" (one-directional, same as before).
+- **Push more computation into DuckDB/Rust, less into hand-rolled JS.**
+  Partially done: settlement population (previously missing entirely —
+  `settlements.geojson` carries no population field) now comes from a
+  DuckDB-WASM query over `population_by_settlement.parquet`
+  (`settlementPopulationByCode()` in `web/src/lib/duckdb.ts`), alongside
+  the existing buildings query. Ranking/sorting logic stays in TS
+  (`useSettlementRows.ts`) — see note above on why. Rust/wasm
+  (`engine/src/reachability.rs`) still owns all graph-shaped computation.
+
 ### Future direction (not in scope for the prototype)
 
 A fuller operational dashboard, digital-twin-like, capable of simulating
@@ -344,6 +431,47 @@ geometry type in WKB`.** Seen even with process isolation, on
   because they only exercised 9 hub lookups, not 1,619 settlement
   lookups at the scale the web page actually needed.
 
+### Frontend (React/Vite/MapLibre/DuckDB-WASM)
+
+- **DuckDB-WASM's `read_parquet()` needs an explicit scheme.** A
+  root-relative path like `/data/flores/x.parquet` fails with `IO Error:
+  No files found that match the pattern` — without `http://`/`https://`,
+  DuckDB resolves it against its own in-browser virtual filesystem
+  instead of fetching it. Resolve to an absolute URL first
+  (`new URL(path, window.location.origin).href`) before passing it into
+  any `read_parquet('...')` call — see `dataUrl()` in
+  `web/src/lib/duckdb.ts`.
+- **MapLibre sets its own container's `position`, overriding an
+  `absolute inset-0` utility class on that element.** Sizing a MapLibre
+  container via "absolute, inset 0, let the positioned ancestor's height
+  win" silently collapses to 0 height, because MapLibre's own JS ends up
+  controlling that element's `position` (confirmed via computed style:
+  `position: relative` despite an `absolute` class present) — `inset-0`
+  has no sizing effect on a `relative`-positioned element. Fix: give the
+  element MapLibre mounts into real `h-full w-full` sizing instead, and
+  put the `absolute inset-0` positioning on a wrapper *around* it. Only
+  found by comparing `getBoundingClientRect()` down the DOM chain in a
+  live browser — the dev-server boot looked fine (data loaded, HUD
+  numbers populated) while the map canvas stayed a black rectangle.
+- **React 18 StrictMode double-invokes a mount effect with no cleanup,
+  and a wasm engine boot is not safe to run twice.** Booting the
+  `ReachEngine` (wraps a wasm-bindgen `Engine`) from a bare `useEffect`
+  let StrictMode's dev-only double-invocation build two wasm `Engine`
+  instances; one's finalizer freeing shared wasm linear memory while the
+  other was still in use crashed as a wasm `unreachable` trap
+  (`RuntimeError: unreachable` at `__rdl_dealloc`) the next time
+  `compute_state()`/`break_count()` ran — an uncaught exception that blew
+  away the whole React tree with no on-screen explanation (no error
+  boundary existed yet). Fixed at the source with an idempotency guard
+  (`if (get().phase !== "idle") return;` at the top of the store's
+  `boot()`), plus added an `ErrorBoundary` around the app as
+  defense-in-depth so a future wasm panic degrades to a message instead
+  of a blank page. General lesson: any wasm object with explicit
+  lifetime/finalization is not safe to construct from an effect body
+  without a re-entrancy guard, specifically because of StrictMode's dev
+  double-invocation — this class of bug won't reproduce in a production
+  build, only in dev, which is exactly when it's cheapest to catch.
+
 ### Tooling / process
 
 - **`LNK1104: cannot open file ...exe` from `cargo build`/`cargo test`
@@ -373,6 +501,62 @@ OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
 
 - User has other ideas for this project not yet detailed — to be added
   as they come up.
+- **Islands / structurally isolated segments.** Some settlements (small
+  islands, islets off Flores) have no road connection to the mainland
+  network at all — not cut off by the earthquake, just never
+  road-connected. Today's multi-source Dijkstra from hubs already can't
+  cross water, so these already render as "unreachable," but that's
+  indistinguishable from a mainland settlement cut off by damage — one
+  needs road repair, the other needs a different logistics mode
+  (maritime/air) entirely, and an operator needs to tell them apart at a
+  glance. Plan: precompute connected components of the undamaged graph
+  once (union-find over `graph.rs`, no hub involved) and tag each
+  settlement with a component ID. A settlement whose component never
+  contains a hub is **structurally unreachable by road** (baseline, not
+  event-caused). A settlement in a hub's component but currently
+  unreached (because a field report marked a segment broken) is **cut
+  off by damage**. Render these as distinct states, not one
+  "unreachable" bucket.
+- **Reachability as an origin-destination problem; distribution points
+  as a second hub tier.** Reachability here is fundamentally
+  origin(hub)-destination(settlement), and future work should add
+  "titik penyaluran bantuan" (aid distribution/coordination points) as
+  additional origins, adjusting distribution accordingly. This mirrors
+  how humanitarian logistics (e.g. the WFP-style Logistics Cluster
+  model) usually structures it: a tiered hub-and-spoke —
+  warehouses/ports/airstrips → forward distribution points → last-mile
+  settlements — with each settlement assigned to its *nearest* serving
+  point, not just flagged "reachable from any hub." The existing
+  multi-source Dijkstra in `reachability.rs` already computes distance
+  from the nearest hub; extending it to also track *which source won*
+  during relaxation gives a nearest-distribution-point assignment per
+  settlement at no extra algorithmic cost. A distribution point then is
+  just another hub with a `hub_type` field (warehouse vs. distribution
+  point), added/moved through the same `set_hubs` + recompute flow
+  already built for the Spatial Intervention Loop's road-break
+  interaction — no new interaction pattern needed, just a second hub
+  category and per-settlement "assigned to" output instead of a boolean.
+- **Buildings layer: overview → filter → detail-on-demand (Shneiderman's
+  mantra), backed by GeoParquet + DuckDB.** Current dashboard already
+  does the middle tier (settlement-level building-count choropleth from
+  `buildings_by_settlement.parquet` via DuckDB-WASM). Plan to complete
+  the pattern:
+  - **Overview** — H3 (res ~7–8) population/building-density hexes from
+    Kontur (already H3-indexed, see [[spatial-analytical-intent]]) as a
+    cheap vector layer at low zoom, no parquet queried yet.
+  - **Filter** — today's settlement-level choropleth, unchanged.
+  - **Detail on demand** — past a zoom threshold, query individual
+    building footprints by viewport bounding box from a GeoParquet
+    (local `indonesia_buildings.parquet`, or Source.coop's Google Open
+    Buildings via `httpfs` for better rural coverage than OSM alone).
+    DuckDB's row-group pruning plus a spatial bbox filter means this
+    never loads the full buildings dataset into browser memory —
+    cheapness comes from querying in place, not from a smaller file.
+    Not yet built; needs per-building geometry, which the current
+    pre-aggregated settlement parquet doesn't carry.
+  Worth checking whether a terrain/slope layer (also H3-joinable) adds
+  useful signal at the overview tier, e.g. for landslide-risk context
+  alongside population/building density.
 - Scope confirmed as all of Flores island (nine regencies); NTT province
   is a likely but not-yet-committed further expansion — treat "Flores"
   as the working boundary until that's decided.

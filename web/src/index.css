@@ -1,0 +1,155 @@
+@import "tailwindcss";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans-condensed/600.css";
+@import "@fontsource/ibm-plex-sans-condensed/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/*
+ * Reach-Ops design tokens — a field-operations / cartographic register, not
+ * a SaaS-dashboard one: a surveyor's dark table rather than an IDE. Status
+ * colour is the load-bearing signal across every view (map, list, KPI),
+ * so it is defined once here and never overridden locally.
+ */
+@theme {
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --color-ground: #14161a;
+  --color-panel: #1b1e23;
+  --color-panel-raised: #22262c;
+  --color-panel-sunken: #101216;
+  --color-line: #2c3138;
+  --color-line-strong: #3a4048;
+
+  --color-ink: #ede9e2;
+  --color-ink-muted: #9a9690;
+  --color-ink-faint: #656963;
+
+  --color-status-reachable: #5fa980;
+  --color-status-cutoff: #d7a24a;
+  --color-status-broken: #c6524a;
+  --color-status-hub: #4fa8c9;
+  --color-status-report: #a988d9;
+
+  --color-status-reachable-dim: #3a5d4c;
+  --color-status-cutoff-dim: #6b5530;
+  --color-status-broken-dim: #5c322e;
+
+  --animate-flash: flash 900ms ease-out;
+  --animate-sweep: sweep 2.4s linear infinite;
+}
+
+@keyframes flash {
+  0% {
+    color: var(--color-status-hub);
+  }
+  100% {
+    color: var(--color-ink);
+  }
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A faint graticule under every panel — the one persistent cartographic
+   texture in the whole UI, kept subtle enough to read as paper, not noise. */
+.graticule {
+  background-image:
+    linear-gradient(var(--color-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: -1px -1px;
+}
+
+::selection {
+  background: var(--color-status-hub);
+  color: #06121a;
+}
+
+/* Scrollbars: thin, matching the panel register instead of the OS default. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- MapLibre control theming ---------- */
+.maplibregl-ctrl-group {
+  background: var(--color-panel) !important;
+  border: 1px solid var(--color-line) !important;
+  box-shadow: none !important;
+}
+.maplibregl-ctrl-group button {
+  background-color: var(--color-panel) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--color-line) !important;
+}
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(0.85);
+}
+.maplibregl-popup-content {
+  background: var(--color-panel-raised) !important;
+  color: var(--color-ink) !important;
+  border: 1px solid var(--color-line) !important;
+  border-radius: 6px !important;
+  font-family: var(--font-sans) !important;
+  font-size: 12.5px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--color-panel-raised) !important;
+  border-bottom-color: var(--color-panel-raised) !important;
+}
+.maplibregl-popup-close-button {
+  color: var(--color-ink-muted) !important;
+}
