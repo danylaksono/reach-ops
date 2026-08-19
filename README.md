@@ -114,13 +114,17 @@ Three coordinated views (nav rail, far left):
   population affected, roads broken, buildings surveyed) plus the same
   priority list, for a five-second read of the state of play.
 - **Accessibility** — the interactive map: OSM road network coloured by
-  reachable / unreachable-downstream / broken state, computed from the 9
-  placeholder aid hubs via multi-source Dijkstra in the browser (wasm),
-  plus the Spatial Intervention Loop sim panel (pick a road → mark
-  broken → recompute → restore) and per-settlement building-count
+  isochrone band (travel time from the nearest of 9 placeholder aid hubs,
+  time-weighted multi-source Dijkstra in the browser via wasm — see the
+  Phase 4 notes in AGENTS.md), a **Cost** tab exposing every road class's
+  assumed speed as an editable, engine-backed number (Apply recomputes
+  live), the Spatial Intervention Loop sim panel (pick a road → mark
+  broken → recompute → restore), and per-settlement building-count
   choropleth (DuckDB-WASM, 100% in-browser; the dashboard still works if
-  DuckDB-WASM is blocked). Has a fullscreen toggle that collapses all
-  chrome to a minimal corner HUD.
+  DuckDB-WASM is blocked). A basemap switcher (top-right of the map) swaps
+  between dark/light CARTO and Esri World Imagery satellite tiles — no API
+  key for any of them. Has a fullscreen toggle that collapses all chrome
+  to a minimal corner HUD.
 - **Damage & Loss (DALA)** — a lightweight severity-proxy report page,
   explicitly not a full DaLA/PDNA assessment; see the Phase 3 notes in
   AGENTS.md for the scope decision and what each sector still needs.

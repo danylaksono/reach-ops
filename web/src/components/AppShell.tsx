@@ -6,6 +6,7 @@ import { TelemetryStrip } from "./TelemetryStrip";
 import { RightPanel } from "./RightPanel";
 import { MapCanvas } from "./MapCanvas";
 import { Legend } from "./Legend";
+import { BasemapSwitcher } from "./BasemapSwitcher";
 import { FullscreenHud } from "./FullscreenHud";
 import { OverviewView } from "./views/OverviewView";
 import { DalaView } from "./views/DalaView";
@@ -41,6 +42,7 @@ export function AppShell() {
           <div className="relative min-h-0 flex-1">
             <MapCanvas visible={mapVisible} />
             {mapVisible && showChrome && <Legend />}
+            {mapVisible && showChrome && <BasemapSwitcher />}
             {mapVisible && fullscreen && <FullscreenHud />}
             {view === "overview" && (
               <div className="absolute inset-0 bg-ground">

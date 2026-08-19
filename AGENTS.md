@@ -538,6 +538,49 @@ geometry type in WKB`.** Seen even with process isolation, on
   without a re-entrancy guard, specifically because of StrictMode's dev
   double-invocation — this class of bug won't reproduce in a production
   build, only in dev, which is exactly when it's cheapest to catch.
+- **A `useEffect`'s dependency array is a promise about when a call
+  happens — get it wrong and the call can silently never happen again.**
+  The buildings choropleth was invisible: not a styling issue, the
+  MapLibre `buildings` source/layer were never added to the map at all.
+  Cause: `MapCanvas`'s layer-setup effect called `MapView.initLayers()`
+  (which created the buildings source, conditionally, only if data was
+  already available) keyed on `[roads, settlements, hubs]` — deliberately
+  *not* `buildingsLayer`, since re-running the whole `initLayers()` a
+  second time would throw ("there is already a source with this ID") on
+  every *other* source it also creates. But `buildingsLayer` resolves
+  later than roads/settlements/hubs (it's a separate async DuckDB query,
+  a distinct boot phase in `useDashboardStore.boot()`), so on every real
+  run the effect fired with `buildingsLayer` still `null`, and — because
+  it wasn't a dependency — never fired again once the query resolved. The
+  toggle in the Layers panel still "worked" (flipped state, called
+  `setLayerVisibility`) but on a layer that had never been created, so it
+  was a silent no-op. Fixed by decoupling the two: the buildings
+  source/layer is now always created empty inside `onLoad()` (same
+  pattern as `road-pieces`/`break-marks`), and a dedicated
+  `updateBuildingsLayer()` + its own effect (keyed on `[buildingsLayer]`
+  alone) pushes data in via `setData()` whenever it's ready — no
+  create-vs-update ambiguity, no re-entrant `addSource` calls. General
+  lesson: when a value that arrives asynchronously is deliberately left
+  out of an effect's dependency array to avoid a re-entrancy problem
+  elsewhere, that's a sign the "do this once" and "update this
+  reactively" concerns should be two separate effects/methods, not one
+  overloaded one — the road-pieces/break-marks layers already followed
+  that split correctly (`initLayers` creates empty, `updatePieces`/
+  `updateBreaks` populate); buildings just hadn't been ported the same
+  way. Found via a `window.__map` debug handle
+  (`MapCanvas.tsx`, `import.meta.env.DEV`-gated, tree-shaken out of
+  production builds) exposing the live MapLibre instance to the console
+  — `map.getSource('buildings')` returning `undefined` after boot proved
+  it wasn't a paint/visibility issue before any paint expression was
+  touched.
+- **A choropleth's colour-ramp stops need checking against the real data
+  distribution, not guessed.** Separately from the bug above, the
+  buildings fill's original stops (0/520/2300) put the *median* settlement
+  (169 buildings — checked via `quantile_cont` in DuckDB against the real
+  parquet) at under 15% of the ramp's range, i.e. near-invisible. Restated
+  stops at the actual quantiles (p25/p50/p75/p90/p98) made the layer
+  legible across the real spread instead of only the handful of outlier
+  settlements near the guessed upper bound.
 
 ### Tooling / process
 

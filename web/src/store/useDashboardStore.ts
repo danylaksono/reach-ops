@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { loadAll, centroidOf } from "../lib/data";
 import { ReachEngine } from "../lib/engine";
 import { settlementBuildingLayer, settlementPopulationByCode } from "../lib/duckdb";
+import type { BasemapId } from "../lib/mapView";
 import type {
   ComputeState,
   CostProfile,
@@ -48,6 +49,7 @@ type DashboardState = {
 
   view: ViewMode;
   fullscreen: boolean;
+  basemap: BasemapId;
   layerVisibility: Record<LayerName, boolean>;
   settleSort: SettleSort;
   selectedRoad: SelectedRoad | null;
@@ -77,6 +79,7 @@ type DashboardState = {
   setLayerVisible: (name: LayerName, visible: boolean) => void;
   setView: (v: ViewMode) => void;
   setFullscreen: (v: boolean) => void;
+  setBasemap: (id: BasemapId) => void;
   setSettleSort: (v: SettleSort) => void;
   setCostSpeed: (highwayClass: string, kmh: number) => void;
   setCostDefaultSpeed: (kmh: number) => void;
@@ -114,6 +117,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   view: "accessibility",
   fullscreen: false,
+  basemap: "dark",
   layerVisibility: {
     roads: true,
     buildings: false,
@@ -313,6 +317,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   setFullscreen(v) {
     set({ fullscreen: v });
+  },
+
+  setBasemap(id) {
+    set({ basemap: id });
   },
 
   setSettleSort(v) {

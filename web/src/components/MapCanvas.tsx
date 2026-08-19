@@ -24,6 +24,7 @@ export function MapCanvas({ visible }: { visible: boolean }) {
   const buildingsLayer = useDashboardStore((s) => s.buildingsLayer);
   const lastResult = useDashboardStore((s) => s.lastResult);
   const layerVisibility = useDashboardStore((s) => s.layerVisibility);
+  const basemap = useDashboardStore((s) => s.basemap);
   const selectedRoad = useDashboardStore((s) => s.selectedRoad);
   const selectRoad = useDashboardStore((s) => s.selectRoad);
   const clearSelection = useDashboardStore((s) => s.clearSelection);
@@ -49,6 +50,9 @@ export function MapCanvas({ visible }: { visible: boolean }) {
         });
       },
     });
+    if (import.meta.env.DEV) {
+      (window as unknown as { __map: unknown }).__map = mapRef.current.map;
+    }
     return () => {
       mapRef.current?.destroy();
       mapRef.current = null;
@@ -63,11 +67,18 @@ export function MapCanvas({ visible }: { visible: boolean }) {
       roadsGeojson: roads,
       settlementsGeojson: settlements,
       hubsGeojson: hubs,
-      buildingsLayer,
       gikGeojson: gik,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roads, settlements, hubs]);
+
+  // Buildings resolve later (async DuckDB query, well after roads/
+  // settlements/hubs) — pushed in on its own once available, not folded
+  // into the one-shot initLayers() call above.
+  useEffect(() => {
+    if (buildingsLayer) mapRef.current?.updateBuildingsLayer(buildingsLayer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildingsLayer]);
 
   // Fit to Flores once the boundary is known.
   useEffect(() => {
@@ -83,6 +94,12 @@ export function MapCanvas({ visible }: { visible: boolean }) {
     mapRef.current.updatePieces(lastResult.pieces);
     mapRef.current.updateBreaks(lastResult.breaks);
   }, [lastResult]);
+
+  // Basemap switch (dark / light / satellite) — retiles in place.
+  useEffect(() => {
+    mapRef.current?.setBasemap(basemap);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basemap]);
 
   // Layer visibility toggles.
   useEffect(() => {

@@ -6,7 +6,8 @@
 // tears the map down.
 //
 // Layers (bottom to top):
-//   basemap      dark CARTO raster tiles (no API key)
+//   basemap      switchable raster tiles — dark/light CARTO or Esri World
+//                Imagery satellite, no API key for any of them (setBasemap)
 //   buildings    per-settlement building-count choropleth (duckdb.ts)
 //   settlements  settlement polygons + labels
 //   road-pieces  accessibility-coloured road *pieces* (dynamic status)
@@ -16,11 +17,28 @@
 //   selected     white highlight for the selected road
 
 import maplibregl from "maplibre-gl";
-import type { LngLatLike, MapGeoJSONFeature, MapMouseEvent } from "maplibre-gl";
+import type { LngLatLike, MapGeoJSONFeature, MapMouseEvent, RasterTileSource } from "maplibre-gl";
 import { ISOCHRONE_BANDS, STATUS, UNREACHABLE_COLOR } from "./palette";
 import type { GeoJSON, RoadBreak, RoadPiece } from "./types";
 
-const DARK_BASEMAP_URL = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+export type BasemapId = "dark" | "light" | "satellite";
+
+/** No API key required for any of these. Esri World Imagery's tile
+ *  endpoint is `{z}/{y}/{x}` (row/col, not the usual x/y) — get that
+ *  order wrong and every tile 404s silently onto a blank grey basemap. */
+export const BASEMAPS: Record<BasemapId, { label: string; tiles: string[]; maxzoom?: number }> = {
+  dark: { label: "Dark", tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"] },
+  light: { label: "Light", tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"] },
+  satellite: {
+    label: "Satellite",
+    tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+    maxzoom: 19,
+  },
+};
+
+const BASEMAP_ATTRIBUTION =
+  '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a> · ' +
+  "Esri, Maxar, Earthstar Geographics";
 
 /** `["step", ["get","duration_min"], firstColor, b1, c1, b2, c2, ...]` —
  *  MapLibre's step expression colours by the *last* boundary at or below
@@ -113,9 +131,14 @@ export class MapView {
         version: 8,
         glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
         sources: {
-          carto: { type: "raster", tiles: [DARK_BASEMAP_URL], tileSize: 256 },
+          basemap: {
+            type: "raster",
+            tiles: BASEMAPS.dark.tiles,
+            tileSize: 256,
+            attribution: BASEMAP_ATTRIBUTION,
+          },
         },
-        layers: [{ id: "basemap", type: "raster", source: "carto" }],
+        layers: [{ id: "basemap", type: "raster", source: "basemap" }],
       },
       center: [121.2, -8.45],
       zoom: 7.5,
@@ -124,22 +147,25 @@ export class MapView {
     this.bindEvents();
   }
 
+  // Buildings deliberately aren't a parameter here — that data resolves
+  // later (async DuckDB query) than roads/settlements/hubs, so it's pushed
+  // in afterwards via updateBuildingsLayer() instead of being part of this
+  // one-shot setup. Threading it through this call used to mean the layer
+  // only ever got created if the query happened to resolve before this
+  // ran, which in practice it never did.
   initLayers({
     roadsGeojson,
     settlementsGeojson,
     hubsGeojson,
-    buildingsLayer,
     gikGeojson,
   }: {
     roadsGeojson: GeoJSON;
     settlementsGeojson: GeoJSON;
     hubsGeojson: GeoJSON;
-    buildingsLayer: GeoJSON | null;
     gikGeojson: GeoJSON | null;
   }) {
     this.roadsGeojson = roadsGeojson;
-    const build = () =>
-      this.onLoad({ settlementsGeojson, hubsGeojson, buildingsLayer, gikGeojson });
+    const build = () => this.onLoad({ settlementsGeojson, hubsGeojson, gikGeojson });
     if (this.map.isStyleLoaded()) build();
     else this.map.once("load", build);
   }
@@ -147,12 +173,10 @@ export class MapView {
   private onLoad({
     settlementsGeojson,
     hubsGeojson,
-    buildingsLayer,
     gikGeojson,
   }: {
     settlementsGeojson: GeoJSON;
     hubsGeojson: GeoJSON;
-    buildingsLayer: GeoJSON | null;
     gikGeojson: GeoJSON | null;
   }) {
     this.map.addSource("road-pieces", {
@@ -177,26 +201,40 @@ export class MapView {
       },
     });
 
-    if (buildingsLayer) {
-      this.map.addSource("buildings", { type: "geojson", data: buildingsLayer as never });
+    {
+      this.map.addSource("buildings", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
       this.map.addLayer({
         id: "buildings",
         type: "fill",
         source: "buildings",
         layout: { visibility: "none" },
         paint: {
+          // Stops are the actual quantiles of building_count across Flores
+          // settlements (median 169, p75 338, p90 620, p98 1245, checked
+          // via a DuckDB quantile_cont query against the real parquet) —
+          // the previous 520/2300 thresholds were guessed and put most of
+          // the island at ~5% effective opacity, which read as "this layer
+          // doesn't work" rather than "most settlements have few buildings".
           "fill-color": [
             "interpolate",
             ["linear"],
             ["get", "building_count"],
             0,
-            "rgba(0,0,0,0)",
-            520,
-            `${STATUS.hub}55`,
-            2300,
-            `${STATUS.broken}99`,
+            "rgba(79,168,201,0)",
+            50,
+            "rgba(79,168,201,0.18)",
+            170,
+            "rgba(79,168,201,0.38)",
+            350,
+            "rgba(79,168,201,0.52)",
+            650,
+            "rgba(79,168,201,0.68)",
+            1300,
+            "rgba(79,168,201,0.88)",
           ],
-          "fill-opacity": 0.5,
           "fill-outline-color": "rgba(255,255,255,0.12)",
         },
       });
@@ -355,6 +393,15 @@ export class MapView {
     });
   }
 
+  /** Pushes the DuckDB-derived per-settlement building choropleth onto the
+   *  (always-present, initially-empty) buildings source once the async
+   *  query resolves. Safe to call before the style has loaded — it's a
+   *  no-op until sourceLoaded, same as updatePieces/updateBreaks. */
+  updateBuildingsLayer(data: GeoJSON) {
+    if (!this.sourceLoaded || !this.map.getSource("buildings")) return;
+    (this.map.getSource("buildings") as maplibregl.GeoJSONSource).setData(data as never);
+  }
+
   selectRoadByOsmId(osmId: number | null) {
     this.selectedOsmId = osmId;
     this.renderSelection();
@@ -404,6 +451,13 @@ export class MapView {
   setGikVisible(v: boolean) {
     this.setLayerVisibility("gik", v);
     this.setLayerVisibility("gik-labels", v);
+  }
+
+  /** Retile the basemap source in place — swaps imagery without touching
+   *  any other source/layer or resetting camera position. */
+  setBasemap(id: BasemapId) {
+    const source = this.map.getSource("basemap") as RasterTileSource | undefined;
+    source?.setTiles(BASEMAPS[id].tiles);
   }
 
   fitFlores() {
