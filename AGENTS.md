@@ -411,6 +411,33 @@ the class-based table — worth doing since the data's already there, but
 skipped for now to avoid the unit-parsing edge cases (e.g. `"50"` vs
 `"50 mph"` vs `"national"`) rather than get it subtly wrong.
 
+### Phase 5 — Static deployment (GitHub Pages)
+
+**Status: built.** The dashboard is fully static — the wasm engine and
+DuckDB queries both run client-side, nothing calls back to a server we
+run — so GitHub Pages is a legitimate target, but two things needed
+fixing first, both stemming from `data/` living outside `web/`:
+
+- `data/` (Phase 0 outputs, committed — see README's "Deploying to
+  GitHub Pages") is copied into `web/public/` at build time
+  (`web/scripts/copy-data.mjs`), since only `web/dist/` gets published —
+  a GitHub Pages deploy can't reach a sibling directory the way the dev
+  server's `serve-repo-data` middleware does.
+- Every data/asset reference was an absolute-root path (`/data/...`),
+  which breaks under a GitHub Pages *project* page's subpath
+  (`/reach-ops/...`, not `/`). Fixed by deriving `DATA_BASE`
+  (`src/lib/data.ts`, reused by `src/lib/duckdb.ts`) from
+  `import.meta.env.BASE_URL` instead, and setting Vite's `base` from a
+  `VITE_BASE_PATH` env var that `.github/workflows/deploy.yml` populates
+  from `actions/configure-pages`' output — not a hardcoded repo name, so
+  it keeps working if the repo is renamed or forked.
+
+`.github/workflows/deploy.yml` builds the Rust engine to wasm (pinned
+`wasm-bindgen-cli` version, matched to `engine/Cargo.lock`), runs the two
+fixes above, and deploys on every push to `main`. Requires one manual,
+one-time repo setting that can't be done from a workflow file: **Settings
+→ Pages → Source → GitHub Actions**.
+
 ### Future direction (not in scope for the prototype)
 
 A fuller operational dashboard, digital-twin-like, capable of simulating
@@ -606,6 +633,16 @@ http.server` from the repo root is enough.
   `SUM()` over BIGINT aggregates produces HUGEINT, which the GDAL
   GeoJSON writer rejects (`Not implemented Error: Unsupported type for
 OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
+- **Git Bash on Windows silently mangles POSIX-looking env var values.**
+  Testing the GitHub Pages base-path fix with
+  `VITE_BASE_PATH=/reach-ops npm run build` in the bash tool produced
+  `/Program Files/Git/reach-ops` in the built output — MSYS2's
+  path-conversion layer rewrites anything that looks like a POSIX
+  absolute path, including inline env var assignments, before the child
+  process ever sees it. Not a code bug; verify by rerunning the exact
+  same command via PowerShell (`$env:VITE_BASE_PATH = "/reach-ops"; npm
+  run build`), which doesn't have this translation layer, before
+  concluding a base-path/absolute-path feature is broken.
 
 ## Open notes / things not yet resolved
 

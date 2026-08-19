@@ -19,6 +19,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated at build time by web/scripts/copy-data.mjs from the repo-root
+# data/ (the committed source of truth) — not itself checked in.
+web/public/
+
 # OS / editor
 .DS_Store
 Thumbs.db

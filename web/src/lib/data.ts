@@ -1,10 +1,12 @@
-// Data loading for the Reach-Ops dashboard. Served from the repo root (see
-// vite.config.ts's serve-repo-data middleware in dev; a sibling static
-// server in production), so data lives at /data/<study_area>/.
-
+// Data loading for the Reach-Ops dashboard. In dev, vite.config.ts's
+// serve-repo-data middleware serves /data straight from the repo root; in
+// a build, scripts/copy-data.mjs copies it into web/public/data so it
+// ships inside dist/. Both are rooted at import.meta.env.BASE_URL (Vite's
+// configured `base`, "/" locally, "/<repo-name>/" on GitHub Pages) so the
+// same code works unmodified at either path.
 import type { GeoFeature, GeoJSON } from "./types";
 
-export const DATA_BASE = "/data/flores";
+export const DATA_BASE = `${import.meta.env.BASE_URL}data/flores`;
 
 export async function fetchJson<T = GeoJSON>(path: string): Promise<T> {
   const res = await fetch(path);

@@ -11,19 +11,22 @@
 
 import * as duckdb from "@duckdb/duckdb-wasm";
 import type { AsyncDuckDB } from "@duckdb/duckdb-wasm";
+import { DATA_BASE } from "./data";
 import type { GeoJSON } from "./types";
 
 // DuckDB-WASM's read_parquet() only recognises a remote file when the path
 // carries an explicit scheme (http://...) — a root-relative path like
 // "/data/..." resolves against its own in-browser virtual filesystem
 // instead and fails with "No files found that match the pattern". Resolve
-// against the page origin so it's unambiguous.
+// against the page origin so it's unambiguous. DATA_BASE is already
+// base-path-aware (see data.ts) so this works unmodified under a GitHub
+// Pages project-page subpath too.
 function dataUrl(path: string) {
   return new URL(path, window.location.origin).href;
 }
 
-const BUILDINGS_PARQUET = dataUrl("/data/flores/buildings_by_settlement.parquet");
-const POPULATION_PARQUET = dataUrl("/data/flores/population_by_settlement.parquet");
+const BUILDINGS_PARQUET = dataUrl(`${DATA_BASE}/buildings_by_settlement.parquet`);
+const POPULATION_PARQUET = dataUrl(`${DATA_BASE}/population_by_settlement.parquet`);
 
 let _dbPromise: Promise<{ db: AsyncDuckDB }> | null = null;
 

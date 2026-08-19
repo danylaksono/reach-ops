@@ -24,7 +24,16 @@ function serveRepoData() {
   };
 }
 
+// GitHub Pages project sites are served under /<repo-name>/, not /, so
+// every root-relative asset/data reference needs that prefix at build
+// time. The deploy workflow sets VITE_BASE_PATH from
+// actions/configure-pages' `base_path` output rather than hardcoding the
+// repo name here — local `npm run build` (VITE_BASE_PATH unset) still
+// produces a root-relative "/" build, e.g. for `python -m http.server`.
+const base = process.env.VITE_BASE_PATH ? `${process.env.VITE_BASE_PATH}/` : "/";
+
 export default defineConfig({
+  base,
   plugins: [react(), tailwindcss(), serveRepoData()],
   resolve: {
     alias: {

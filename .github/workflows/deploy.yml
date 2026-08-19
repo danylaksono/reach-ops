@@ -1,0 +1,99 @@
+name: Deploy dashboard to GitHub Pages
+
+# The dashboard is fully static (wasm engine + DuckDB-WASM both run
+# client-side, no backend of ours) but two build steps have to happen
+# before `vite build` can run: the Rust engine needs compiling to wasm
+# (web/pkg/ is gitignored, not committed), and the Phase 0 data outputs
+# need copying from the repo-root data/ into web/public/ (see
+# web/scripts/copy-data.mjs — data/ itself is committed, since it can't be
+# regenerated in CI without the hand-prepared raw extracts in
+# local-data/, which aren't).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; let an in-flight run finish rather
+# than cancelling it mid-deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      - name: Cache wasm-bindgen-cli
+        id: cache-wasm-bindgen
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          # Must exactly match the wasm-bindgen crate version resolved in
+          # engine/Cargo.lock — a mismatched CLI refuses to run.
+          key: wasm-bindgen-cli-0.2.127-${{ runner.os }}
+
+      - name: Install wasm-bindgen-cli
+        if: steps.cache-wasm-bindgen.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Build engine to wasm
+        working-directory: engine
+        run: |
+          cargo build --release --target wasm32-unknown-unknown --lib
+          wasm-bindgen --target web --out-dir ../web/pkg \
+            target/wasm32-unknown-unknown/release/reach_ops_engine.wasm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - name: Build frontend
+        working-directory: web
+        env:
+          # e.g. "/reach-ops" for a project page — copy-data.mjs runs as
+          # part of `npm run build`; base-path handling is in
+          # vite.config.ts / src/lib/data.ts (see AGENTS.md's deployment
+          # note for why this can't just be a hardcoded "/").
+          VITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
