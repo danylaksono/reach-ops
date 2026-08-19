@@ -30,10 +30,10 @@ export function TelemetryStrip() {
   const engine = useDashboardStore((s) => s.engine);
 
   const total = lastResult?.settlements.length ?? 0;
-  const reached = lastResult?.settlements.filter((s) => s.distance_m !== null).length ?? 0;
+  const reached = lastResult?.settlements.filter((s) => s.duration_s !== null).length ?? 0;
   const reachPct = total ? Math.round((reached / total) * 100) : null;
 
-  const byId = new Map((lastResult?.settlements ?? []).map((s) => [s.id, s.distance_m]));
+  const byId = new Map((lastResult?.settlements ?? []).map((s) => [s.id, s.duration_s]));
   let popTotal = 0;
   let popReached = 0;
   for (const t of targets) {

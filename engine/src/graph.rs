@@ -42,6 +42,13 @@ pub struct EdgeData {
     pub osm_id: i64,
     pub length_m: f64,
     pub passable: bool,
+    /// OSM `highway` tag — looked up against a `CostModel`'s speed table at
+    /// Dijkstra time (see `cost.rs`), not baked into a precomputed weight,
+    /// so the cost model can change at runtime without rebuilding the graph.
+    pub highway: String,
+    /// Multiplier applied to travel time, uniformly 1.0 today. Placeholder
+    /// for a future terrain/slope cost layer — see `cost.rs` module docs.
+    pub terrain_multiplier: f64,
 }
 
 /// One clickable road feature (one GeoJSON LineString).
@@ -98,6 +105,10 @@ pub struct SegmentPiece {
     pub feature: usize,
     pub coords: Vec<[f64; 2]>,
     pub reachable: bool,
+    /// Travel time (seconds) to reach the far end of this piece along the
+    /// fastest path from a hub, for isochrone-band colouring. `None` when
+    /// either end is unreachable (mirrors `reachable`).
+    pub duration_s: Option<f64>,
 }
 
 /// Fraction of a segment beyond which a projected point counts as "on the
@@ -140,6 +151,10 @@ struct RoadProperties {
     osm_id: i64,
     #[serde(default)]
     oneway: String,
+    /// OSM `highway` tag — drives the cost-model speed lookup (`cost.rs`).
+    /// Missing/unrecognised values fall back to `CostModel::default_speed_kmh`.
+    #[serde(default)]
+    highway: String,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +210,7 @@ impl RoadGraph {
             if feature.geometry.geom_type == "LineString" {
                 let osm_id = feature.properties.osm_id;
                 let oneway = feature.properties.oneway.trim();
+                let highway = feature.properties.highway.trim().to_string();
                 let reversed = oneway == "-1" || oneway.eq_ignore_ascii_case("reverse");
                 let forward_only = !reversed
                     && (oneway == "1"
@@ -207,19 +223,26 @@ impl RoadGraph {
                     let a = get_or_add_node(&mut graph, &mut node_index, lon_a, lat_a);
                     let b = get_or_add_node(&mut graph, &mut node_index, lon_b, lat_b);
                     let length_m = haversine_m((lon_a, lat_a), (lon_b, lat_b));
+                    let edge_data = |highway: &str| EdgeData {
+                        osm_id,
+                        length_m,
+                        passable: true,
+                        highway: highway.to_string(),
+                        terrain_multiplier: 1.0,
+                    };
 
                     let mut seg_edges = Vec::with_capacity(2);
                     if reversed {
-                        let e = graph.add_edge(b, a, EdgeData { osm_id, length_m, passable: true });
+                        let e = graph.add_edge(b, a, edge_data(&highway));
                         edges_by_osm_id.entry(osm_id).or_default().push(e);
                         seg_edges.push(e);
                     } else if forward_only {
-                        let e = graph.add_edge(a, b, EdgeData { osm_id, length_m, passable: true });
+                        let e = graph.add_edge(a, b, edge_data(&highway));
                         edges_by_osm_id.entry(osm_id).or_default().push(e);
                         seg_edges.push(e);
                     } else {
-                        let e1 = graph.add_edge(a, b, EdgeData { osm_id, length_m, passable: true });
-                        let e2 = graph.add_edge(b, a, EdgeData { osm_id, length_m, passable: true });
+                        let e1 = graph.add_edge(a, b, edge_data(&highway));
+                        let e2 = graph.add_edge(b, a, edge_data(&highway));
                         edges_by_osm_id.entry(osm_id).or_default().push(e1);
                         edges_by_osm_id.entry(osm_id).or_default().push(e2);
                         seg_edges.push(e1);
@@ -344,11 +367,12 @@ impl RoadGraph {
         // original edge surviving). Every other edge of this segment (other
         // pairs from earlier splits) is left as-is.
         let mut removed_edges: Vec<EdgeIndex> = Vec::new();
-        let mut pair_edges: Vec<(NodeIndex, NodeIndex, bool)> = Vec::new();
+        let mut pair_edges: Vec<(NodeIndex, NodeIndex, bool, String, f64)> = Vec::new();
         for &e in &self.segments[seg_idx].edges {
             let (a, b) = self.graph.edge_endpoints(e).unwrap();
             if (a == x && b == y) || (a == y && b == x) {
-                pair_edges.push((a, b, self.graph[e].passable));
+                let data = &self.graph[e];
+                pair_edges.push((a, b, data.passable, data.highway.clone(), data.terrain_multiplier));
                 removed_edges.push(e);
             }
         }
@@ -372,14 +396,35 @@ impl RoadGraph {
         // x->m and m->y (with the geometric direction deciding which half
         // gets t_geo of the length).
         let mut new_edges: Vec<EdgeIndex> = Vec::with_capacity(pair_edges.len() * 2);
-        for &(a, b, passable) in &pair_edges {
+        for (a, b, passable, highway, terrain_multiplier) in &pair_edges {
+            let (a, b, passable) = (*a, *b, *passable);
             let (len_a_m, len_m_b) = if (a, b) == (x, y) {
                 (length_m * t_geo, length_m * (1.0 - t_geo))
             } else {
                 (length_m * (1.0 - t_geo), length_m * t_geo)
             };
-            let e1 = self.graph.add_edge(a, m, EdgeData { osm_id, length_m: len_a_m, passable });
-            let e2 = self.graph.add_edge(m, b, EdgeData { osm_id, length_m: len_m_b, passable });
+            let e1 = self.graph.add_edge(
+                a,
+                m,
+                EdgeData {
+                    osm_id,
+                    length_m: len_a_m,
+                    passable,
+                    highway: highway.clone(),
+                    terrain_multiplier: *terrain_multiplier,
+                },
+            );
+            let e2 = self.graph.add_edge(
+                m,
+                b,
+                EdgeData {
+                    osm_id,
+                    length_m: len_m_b,
+                    passable,
+                    highway: highway.clone(),
+                    terrain_multiplier: *terrain_multiplier,
+                },
+            );
             new_edges.push(e1);
             new_edges.push(e2);
         }
@@ -466,7 +511,7 @@ impl RoadGraph {
     /// - reachable otherwise if at least one node of the segment is in `dist`.
     pub fn feature_states(
         &self,
-        dist: &HashMap<NodeIndex, f64>,
+        dist: &HashMap<NodeIndex, crate::reachability::TravelCost>,
     ) -> Vec<FeatureComputed> {
         self.feature_ranges
             .iter()
@@ -499,14 +544,21 @@ impl RoadGraph {
     /// way going dark.
     pub fn segment_pieces(
         &self,
-        dist: &HashMap<NodeIndex, f64>,
+        dist: &HashMap<NodeIndex, crate::reachability::TravelCost>,
     ) -> Vec<SegmentPiece> {
         let mut out = Vec::new();
         for (fi, range) in self.feature_ranges.iter().enumerate() {
             for seg in &self.segments[range.start..range.end] {
                 for pair in seg.nodes.windows(2) {
                     let (a, b) = (pair[0], pair[1]);
-                    let reachable = dist.contains_key(&a) && dist.contains_key(&b);
+                    let (ta, tb) = (dist.get(&a), dist.get(&b));
+                    let reachable = ta.is_some() && tb.is_some();
+                    // The far/slower end of the piece is the honest "time
+                    // to have this whole piece usable" figure.
+                    let duration_s = match (ta, tb) {
+                        (Some(x), Some(y)) => Some(x.time_s.max(y.time_s)),
+                        _ => None,
+                    };
                     out.push(SegmentPiece {
                         feature: fi,
                         coords: vec![
@@ -514,6 +566,7 @@ impl RoadGraph {
                             [self.graph[b].lon, self.graph[b].lat],
                         ],
                         reachable,
+                        duration_s,
                     });
                 }
             }
@@ -592,7 +645,7 @@ mod tests {
         let a = rg.nearest_node(0.0, 0.0).unwrap();
         let c = rg.nearest_node(0.002, 0.0).unwrap();
 
-        let dist_before = crate::reachability::multi_source_distances(&rg, &[a]);
+        let dist_before = crate::reachability::multi_source_times(&rg, &[a], &crate::cost::CostModel::default());
         let states_before = rg.feature_states(&dist_before);
         assert_eq!(states_before[0].reachable, 1);
         assert_eq!(states_before[0].broken, 0);
@@ -601,7 +654,7 @@ mod tests {
 
         // Break the middle feature entirely -> feature 3 unreachable.
         rg.set_passable(2, false);
-        let dist_after = crate::reachability::multi_source_distances(&rg, &[a]);
+        let dist_after = crate::reachability::multi_source_times(&rg, &[a], &crate::cost::CostModel::default());
         let states_after = rg.feature_states(&dist_after);
         assert_eq!(states_after[1].broken, 1);
         assert_eq!(states_after[1].reachable, 0);
@@ -624,7 +677,7 @@ mod tests {
         let far_end = rg.nearest_node(0.003, 0.0).unwrap();
 
         // Before the break: everything reachable.
-        let dist_before = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist_before = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         assert!(dist_before.contains_key(&far_end));
         assert_eq!(rg.node_count(), 2);
         assert_eq!(rg.feature_states(&dist_before)[0].reachable, 1);
@@ -640,7 +693,7 @@ mod tests {
         assert_eq!(rg.edge_count(), 4);
 
         // Hub side still reachable, far side no longer.
-        let dist = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         assert!(dist.contains_key(&hub));
         assert!(!dist.contains_key(&far_end));
 
@@ -654,7 +707,7 @@ mod tests {
         // Restore: far end reachable again, breaks cleared.
         assert!(rg.restore_break(&bp.id));
         assert_eq!(rg.break_count(), 0);
-        let dist_restored = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist_restored = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         assert!(dist_restored.contains_key(&far_end));
     }
 
@@ -677,7 +730,7 @@ mod tests {
 
         rg.set_break(0.0020, 0.0).expect("break on feature 1");
 
-        let dist = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         // Side road junction (0.001, 0.0) and side end both reachable.
         assert!(dist.contains_key(&side_end));
         // Far end of feature 1 (0.003) unreachable.
@@ -730,12 +783,12 @@ mod tests {
         // No split happened (break at existing node).
         assert_eq!(rg.node_count(), 3);
 
-        let dist = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         assert!(dist.contains_key(&hub));
         assert!(!dist.contains_key(&far));
 
         rg.restore_break(&bp.id);
-        let dist_restored = crate::reachability::multi_source_distances(&rg, &[hub]);
+        let dist_restored = crate::reachability::multi_source_times(&rg, &[hub], &crate::cost::CostModel::default());
         assert!(dist_restored.contains_key(&far));
     }
 }

@@ -11,6 +11,23 @@ export const STATUS = {
   report: "#a988d9",
 } as const;
 
+/**
+ * Isochrone bands: travel time (minutes) from the nearest hub, at the
+ * currently configured cost model. Sequential ramp from the existing
+ * "reachable" green through to "broken" red — same status vocabulary as
+ * the rest of the app, read as fast→slow instead of good→bad. A road
+ * with no value (unreachable) is styled separately, not part of this ramp.
+ */
+export const ISOCHRONE_BANDS: { maxMinutes: number; color: string; label: string }[] = [
+  { maxMinutes: 30, color: "#5fa980", label: "≤ 30 min" },
+  { maxMinutes: 60, color: "#94a85a", label: "≤ 1 h" },
+  { maxMinutes: 120, color: "#d7a24a", label: "≤ 2 h" },
+  { maxMinutes: 240, color: "#c17a45", label: "≤ 4 h" },
+  { maxMinutes: Infinity, color: "#c6524a", label: "> 4 h" },
+];
+
+export const UNREACHABLE_COLOR = "#4a4d54";
+
 export const INK = {
   base: "#ede9e2",
   muted: "#9a9690",

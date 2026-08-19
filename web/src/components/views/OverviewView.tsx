@@ -41,11 +41,11 @@ export function OverviewView() {
   const gik = useDashboardStore((s) => s.gik);
 
   const total = lastResult?.settlements.length ?? 0;
-  const reached = lastResult?.settlements.filter((s) => s.distance_m !== null).length ?? 0;
+  const reached = lastResult?.settlements.filter((s) => s.duration_s !== null).length ?? 0;
   const cutoff = total - reached;
   const reachPct = total ? Math.round((reached / total) * 100) : null;
 
-  const byId = new Map((lastResult?.settlements ?? []).map((s) => [s.id, s.distance_m]));
+  const byId = new Map((lastResult?.settlements ?? []).map((s) => [s.id, s.duration_s]));
   let popTotal = 0;
   let popAffected = 0;
   for (const t of targets) {

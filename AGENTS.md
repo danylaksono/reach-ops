@@ -344,6 +344,73 @@ state, not just a proposal.
   (`useSettlementRows.ts`) — see note above on why. Rust/wasm
   (`engine/src/reachability.rs`) still owns all graph-shaped computation.
 
+### Phase 4 — Time-weighted isochrones & a configurable cost model
+
+**Status: built.** Accessibility was distance-based (raw haversine edge
+length) until now — true isochrones need travel *time*, and Flores'
+terrain makes that a real distinction, not a rounding error. Architecture,
+deliberately split into two layers so terrain can be added later without
+touching the algorithm again:
+
+- **Physical graph** (`engine/src/graph.rs`) — `EdgeData` now carries
+  `highway: String` (the OSM class, parsed from `RoadProperties`, `#[serde(default)]`
+  so a missing tag doesn't fail the load) and `terrain_multiplier: f64`,
+  currently uniformly `1.0` for every edge and not populated from anywhere.
+  This field is the terrain hook: wiring in a real slope/terrain layer
+  later means joining a per-edge multiplier onto this field at graph-build
+  time (e.g. from a DEM), not changing Dijkstra or the wasm API.
+- **Cost model** (`engine/src/cost.rs`, new) — `CostModel` holds a
+  `speeds_kmh: HashMap<String, f64>` (per OSM `highway` class) plus a
+  `default_speed_kmh` fallback, with defaults checked against every class
+  actually present in `data/flores/roads.geojson` (residential, track,
+  tertiary, trunk, secondary, primary, unclassified, living_street, and
+  the three `_link` classes — confirmed via a quick DuckDB `DESCRIBE`/
+  `GROUP BY`, not guessed). `time_seconds(edge)` converts an edge's
+  length + class (+ terrain multiplier) into a travel-time weight. Kept
+  separate from `RoadGraph` on purpose: the same physical network can be
+  re-costed at runtime (an operator tuning assumptions, or later a
+  terrain layer) without rebuilding the graph — only Dijkstra needs to
+  rerun. Configured speeds are floored at 0.5 km/h
+  (`cost.rs::MIN_SPEED_KMH`) so a bad input (0, negative) can never
+  produce an infinite/NaN travel time — `serde_json` refuses to serialize
+  either, so an unguarded bad value would crash the whole
+  `compute_state()` call, not just make one road very slow.
+- **Dijkstra** (`engine/src/reachability.rs`) — `multi_source_times`
+  replaces the old `multi_source_distances`; weights by
+  `cost_model.time_seconds(edge)` instead of raw `length_m`, and returns
+  `TravelCost { time_s, distance_m }` per node — `distance_m` is
+  accumulated along the *same* time-optimal path, not an independently
+  shortest route, so it describes the path actually taken, not a
+  different one. Point-break/blocked-node semantics unchanged (still
+  "arrive at but don't traverse through").
+- **wasm API** (`engine/src/lib.rs`) — `Engine::set_cost_model(json)`
+  replaces the model wholesale (not a merge); `Engine::cost_model_json()`
+  reads the engine's own current model back, specifically so the
+  dashboard's config panel never hardcodes a second copy of the Rust
+  defaults. `SettlementResult` and `PieceResult` both gained `duration_s`
+  alongside the existing `distance_m`.
+- **Dashboard** — the map's road-piece colouring is now a `step`
+  expression over `duration_min` (5-band ramp, ≤30min/≤1h/≤2h/≤4h/>4h,
+  reusing the existing status-colour vocabulary read as fast→slow — see
+  `ISOCHRONE_BANDS` in `web/src/lib/palette.ts`), with unreachable pieces
+  styled separately via `!has` rather than a null-comparison (MapLibre
+  expressions on a missing vs. `null` property are not the same thing —
+  the property is omitted entirely for unreachable pieces, not set to
+  `null`). The priority list sorts and displays by `duration_s`, not
+  `distance_m`. A new **Cost** tab (`CostModelPanel.tsx`) exposes every
+  class's speed as an editable number input, seeded from
+  `engine.getCostModel()`; Apply pushes the edited profile back via
+  `engine.setCostModel()` and recomputes — this is the "configurable
+  assumptions" the isochrone plan asked for, not just a backend flag.
+
+Not done: any actual terrain/slope data — `terrain_multiplier` is real
+and wired through, but every edge is `1.0` today. Also not done: using
+OSM `maxspeed` where it's present in the data (`data/flores/roads.geojson`
+already carries a `maxspeed` property) instead of always falling back to
+the class-based table — worth doing since the data's already there, but
+skipped for now to avoid the unit-parsing edge cases (e.g. `"50"` vs
+`"50 mph"` vs `"national"`) rather than get it subtly wrong.
+
 ### Future direction (not in scope for the prototype)
 
 A fuller operational dashboard, digital-twin-like, capable of simulating

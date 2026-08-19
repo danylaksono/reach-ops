@@ -2,7 +2,7 @@ import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tan
 import { useDashboardStore } from "../../store/useDashboardStore";
 import { useSettlementRows } from "../../lib/useSettlementRows";
 import type { SettlementRow } from "../../lib/types";
-import { fmt, metersLabel } from "../../lib/format";
+import { fmt, durationLabel } from "../../lib/format";
 import { STATUS } from "../../lib/palette";
 import { useMapView } from "../map-context";
 import { Badge } from "../ui/badge";
@@ -41,7 +41,7 @@ const columns: ColumnDef<SettlementRow>[] = [
     header: "",
     cell: ({ row }) =>
       row.original.reached ? (
-        <span className="font-mono text-[10.5px] text-ink-faint">{metersLabel(row.original.distance_m)}</span>
+        <span className="font-mono text-[10.5px] text-ink-faint">{durationLabel(row.original.duration_s)}</span>
       ) : (
         <Badge tone="cutoff">Cutoff</Badge>
       ),

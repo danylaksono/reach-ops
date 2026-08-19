@@ -5,8 +5,9 @@
 use std::fs;
 use std::time::Instant;
 
+use reach_ops_engine::cost::CostModel;
 use reach_ops_engine::graph::RoadGraph;
-use reach_ops_engine::reachability::multi_source_distances;
+use reach_ops_engine::reachability::multi_source_times;
 
 fn main() {
     let roads_json = fs::read_to_string("../data/flores/roads.geojson").expect("read roads.geojson");
@@ -36,7 +37,8 @@ fn main() {
     println!("snapped {} hub points to graph nodes", hub_nodes.len());
 
     let t1 = Instant::now();
-    let dist = multi_source_distances(&rg, &hub_nodes);
+    let cost_model = CostModel::default();
+    let dist = multi_source_times(&rg, &hub_nodes, &cost_model);
     println!(
         "reachability from {} hubs: {} / {} nodes reached in {:?}",
         hub_nodes.len(),

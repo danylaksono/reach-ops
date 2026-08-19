@@ -28,6 +28,9 @@ export type RoadPiece = {
   feature: number;
   coords: [number, number][];
   reachable: boolean;
+  /** Travel time (seconds) to the far end of this piece — the isochrone
+   *  banding value. `null` when unreachable. */
+  duration_s: number | null;
 };
 
 export type RoadBreak = {
@@ -45,7 +48,21 @@ export type RoadState = {
 
 export type SettlementResult = {
   id: string;
+  /** Travel time from the nearest hub, in seconds — the primary isochrone
+   *  metric. `null` when unreachable. */
+  duration_s: number | null;
+  /** Physical distance along that same fastest-by-time path. */
   distance_m: number | null;
+};
+
+/** Configurable travel-cost assumptions — speed (km/h) per OSM `highway`
+ *  class, plus a fallback for unlisted classes. Mirrors the Rust
+ *  `CostModel` shape (`engine/src/cost.rs`) field-for-field; always read
+ *  the engine's own defaults via `ReachEngine.getCostModel()` rather than
+ *  hardcoding a second copy here. */
+export type CostProfile = {
+  speedsKmh: Record<string, number>;
+  defaultSpeedKmh: number;
 };
 
 /** Parsed `Engine.compute_state()` payload. */
@@ -71,6 +88,7 @@ export type SelectedRoad = {
 };
 
 export type SettlementRow = Target & {
+  duration_s: number | null;
   distance_m: number | null;
   reached: boolean;
   buildings: number;

@@ -12,6 +12,7 @@ import { ReachEngine } from "../lib/engine";
 import { settlementBuildingLayer, settlementPopulationByCode } from "../lib/duckdb";
 import type {
   ComputeState,
+  CostProfile,
   GeoJSON,
   LayerName,
   SelectedRoad,
@@ -51,6 +52,13 @@ type DashboardState = {
   settleSort: SettleSort;
   selectedRoad: SelectedRoad | null;
 
+  /** Editable travel-cost assumptions — seeded from the engine's own
+   *  defaults at boot (`ReachEngine.getCostModel()`), not duplicated here.
+   *  Edits are local until `applyCostProfile()` pushes them to the engine
+   *  and recomputes; `costProfileDirty` tracks whether that's pending. */
+  costProfile: CostProfile | null;
+  costProfileDirty: boolean;
+
   boot: () => Promise<void>;
   recompute: () => void;
   selectRoad: (info: {
@@ -70,6 +78,10 @@ type DashboardState = {
   setView: (v: ViewMode) => void;
   setFullscreen: (v: boolean) => void;
   setSettleSort: (v: SettleSort) => void;
+  setCostSpeed: (highwayClass: string, kmh: number) => void;
+  setCostDefaultSpeed: (kmh: number) => void;
+  applyCostProfile: () => void;
+  resetCostProfile: () => void;
 };
 
 function statusFromRoadState(roadState: ComputeState["roads"][number] | undefined) {
@@ -112,6 +124,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
   settleSort: "cutoff",
   selectedRoad: null,
+
+  costProfile: null,
+  costProfileDirty: false,
 
   async boot() {
     // Guard against a second concurrent boot — React 18 StrictMode
@@ -162,6 +177,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       targets,
       engine,
       roadIndexByOsmId,
+      costProfile: engine.getCostModel(),
       gikStatus: gik?.features?.length
         ? `${gik.features.length.toLocaleString("en-US")} reports in study area`
         : "No GIK snapshot found — run `python -m pipeline.gik` to fetch.",
@@ -301,5 +317,41 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   setSettleSort(v) {
     set({ settleSort: v });
+  },
+
+  setCostSpeed(highwayClass, kmh) {
+    set((s) =>
+      s.costProfile
+        ? {
+            costProfile: { ...s.costProfile, speedsKmh: { ...s.costProfile.speedsKmh, [highwayClass]: kmh } },
+            costProfileDirty: true,
+          }
+        : {},
+    );
+  },
+
+  setCostDefaultSpeed(kmh) {
+    set((s) =>
+      s.costProfile
+        ? { costProfile: { ...s.costProfile, defaultSpeedKmh: kmh }, costProfileDirty: true }
+        : {},
+    );
+  },
+
+  applyCostProfile() {
+    const { engine, costProfile } = get();
+    if (!engine || !costProfile) return;
+    engine.setCostModel(costProfile);
+    set({ costProfileDirty: false, statusText: "Recomputing with updated cost model…" });
+    get().recompute();
+  },
+
+  resetCostProfile() {
+    const { engine } = get();
+    if (!engine) return;
+    // The engine's own model is untouched by editing `costProfile` locally
+    // (nothing is pushed until applyCostProfile()), so re-reading it here
+    // discards local edits back to whatever's actually active.
+    set({ costProfile: engine.getCostModel(), costProfileDirty: false });
   },
 }));

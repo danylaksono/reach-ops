@@ -1,7 +1,9 @@
+pub mod cost;
 pub mod graph;
 pub mod reachability;
 mod spatial_index;
 
+use cost::CostModel;
 use graph::{FeatureComputed, RoadGraph};
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
@@ -17,7 +19,22 @@ struct TargetPoint {
 #[derive(Serialize, Clone)]
 struct SettlementResult {
     id: String,
+    /// Travel time from the nearest hub, in seconds — the primary
+    /// isochrone metric. `None` when unreachable.
+    duration_s: Option<f64>,
+    /// Physical distance along that same fastest-by-time path (not an
+    /// independently shortest distance — see `TravelCost` docs).
     distance_m: Option<f64>,
+}
+
+impl SettlementResult {
+    fn from_cost(id: String, cost: Option<&reachability::TravelCost>) -> Self {
+        SettlementResult {
+            id,
+            duration_s: cost.map(|c| c.time_s),
+            distance_m: cost.map(|c| c.distance_m),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -43,6 +60,9 @@ struct PieceResult {
     feature: usize,
     coords: Vec<[f64; 2]>,
     reachable: bool,
+    /// Travel time (seconds) to the far end of this piece, for isochrone
+    /// banding on the map. `None` when unreachable.
+    duration_s: Option<f64>,
 }
 
 /// An active point break for the map's break-marker layer.
@@ -77,6 +97,7 @@ pub struct Engine {
     rg: RoadGraph,
     hub_nodes: Vec<NodeIndex>,
     target_nodes: Vec<(String, Option<NodeIndex>)>,
+    cost_model: CostModel,
 }
 
 #[wasm_bindgen]
@@ -84,7 +105,32 @@ impl Engine {
     #[wasm_bindgen(constructor)]
     pub fn new(roads_geojson: &str) -> Result<Engine, JsValue> {
         let rg = RoadGraph::from_geojson(roads_geojson).map_err(|e| JsValue::from_str(&e))?;
-        Ok(Engine { rg, hub_nodes: Vec::new(), target_nodes: Vec::new() })
+        Ok(Engine {
+            rg,
+            hub_nodes: Vec::new(),
+            target_nodes: Vec::new(),
+            cost_model: CostModel::default(),
+        })
+    }
+
+    /// Replace the travel-cost assumptions (speed km/h per OSM `highway`
+    /// class, plus a fallback) and nothing else — the graph itself is
+    /// untouched, so this is cheap to call from an "apply" button in the
+    /// dashboard; the caller still needs to re-run `compute_state()`
+    /// afterwards. Unknown fields keep serde's normal strictness (this is
+    /// a full replace, not a merge) — the dashboard should always send a
+    /// complete profile, e.g. one it first read via `cost_model_json()`.
+    pub fn set_cost_model(&mut self, json: &str) -> Result<(), JsValue> {
+        self.cost_model =
+            serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(())
+    }
+
+    /// The current cost model as JSON, so the dashboard's config panel can
+    /// initialise from the engine's real defaults instead of duplicating
+    /// them in TypeScript.
+    pub fn cost_model_json(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.cost_model).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn node_count(&self) -> usize {
@@ -184,14 +230,13 @@ impl Engine {
     /// current network state. Call `set_hubs`/`set_targets` at least once
     /// before this.
     pub fn compute_reachability(&self) -> Result<String, JsValue> {
-        let dist = reachability::multi_source_distances(&self.rg, &self.hub_nodes);
+        let dist = reachability::multi_source_times(&self.rg, &self.hub_nodes, &self.cost_model);
 
         let results: Vec<SettlementResult> = self
             .target_nodes
             .iter()
-            .map(|(id, node)| SettlementResult {
-                id: id.clone(),
-                distance_m: node.and_then(|n| dist.get(&n).copied()),
+            .map(|(id, node)| {
+                SettlementResult::from_cost(id.clone(), node.and_then(|n| dist.get(&n)))
             })
             .collect();
 
@@ -217,14 +262,13 @@ impl Engine {
     /// road's pieces so the near side stays green and the far side goes
     /// dark); `distance_m` is null when a settlement is unreachable.
     pub fn compute_state(&self) -> Result<String, JsValue> {
-        let dist = reachability::multi_source_distances(&self.rg, &self.hub_nodes);
+        let dist = reachability::multi_source_times(&self.rg, &self.hub_nodes, &self.cost_model);
 
         let settlements: Vec<SettlementResult> = self
             .target_nodes
             .iter()
-            .map(|(id, node)| SettlementResult {
-                id: id.clone(),
-                distance_m: node.and_then(|n| dist.get(&n).copied()),
+            .map(|(id, node)| {
+                SettlementResult::from_cost(id.clone(), node.and_then(|n| dist.get(&n)))
             })
             .collect();
 
@@ -235,7 +279,12 @@ impl Engine {
             .rg
             .segment_pieces(&dist)
             .into_iter()
-            .map(|p| PieceResult { feature: p.feature, coords: p.coords, reachable: p.reachable })
+            .map(|p| PieceResult {
+                feature: p.feature,
+                coords: p.coords,
+                reachable: p.reachable,
+                duration_s: p.duration_s,
+            })
             .collect();
 
         let breaks: Vec<BreakResult> = self
@@ -265,9 +314,9 @@ mod tests {
 
     #[test]
     fn settlement_result_shape_is_serializable() {
-        let s = SettlementResult { id: "x".into(), distance_m: Some(12.5) };
+        let s = SettlementResult { id: "x".into(), duration_s: Some(30.0), distance_m: Some(12.5) };
         let js = serde_json::to_string(&s).unwrap();
-        assert_eq!(js, r#"{"id":"x","distance_m":12.5}"#);
+        assert_eq!(js, r#"{"id":"x","duration_s":30.0,"distance_m":12.5}"#);
     }
 
     #[test]
@@ -284,7 +333,34 @@ mod tests {
         // Pieces: one per coordinate pair; all reachable before a break.
         assert_eq!(v["pieces"].as_array().unwrap().len(), 1);
         assert_eq!(v["pieces"][0]["reachable"], true);
+        assert!(v["pieces"][0]["duration_s"].is_number());
         assert_eq!(v["breaks"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn cost_model_round_trips_and_changes_travel_time() {
+        let mut e = Engine::new(sample_geojson()).unwrap();
+        e.set_hubs("[[0.0, 0.0]]").unwrap();
+        e.set_targets(r#"[{"id": "s1", "lon": 0.001, "lat": 0.0}]"#).unwrap();
+
+        // Read the engine's own defaults back rather than assuming a copy.
+        let profile = e.cost_model_json().unwrap();
+        let baseline: serde_json::Value =
+            serde_json::from_str(&e.compute_state().unwrap()).unwrap();
+        let baseline_duration = baseline["settlements"][0]["duration_s"].as_f64().unwrap();
+
+        // Halving every speed in the profile should double the travel time.
+        let mut v: serde_json::Value = serde_json::from_str(&profile).unwrap();
+        for speed in v["speedsKmh"].as_object_mut().unwrap().values_mut() {
+            *speed = (speed.as_f64().unwrap() / 2.0).into();
+        }
+        let default_kmh = v["defaultSpeedKmh"].as_f64().unwrap();
+        v["defaultSpeedKmh"] = (default_kmh / 2.0).into();
+        e.set_cost_model(&v.to_string()).unwrap();
+
+        let after: serde_json::Value = serde_json::from_str(&e.compute_state().unwrap()).unwrap();
+        let after_duration = after["settlements"][0]["duration_s"].as_f64().unwrap();
+        assert!((after_duration - baseline_duration * 2.0).abs() < 1e-6);
     }
 
     #[test]

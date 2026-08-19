@@ -17,10 +17,21 @@
 
 import maplibregl from "maplibre-gl";
 import type { LngLatLike, MapGeoJSONFeature, MapMouseEvent } from "maplibre-gl";
-import { STATUS } from "./palette";
+import { ISOCHRONE_BANDS, STATUS, UNREACHABLE_COLOR } from "./palette";
 import type { GeoJSON, RoadBreak, RoadPiece } from "./types";
 
 const DARK_BASEMAP_URL = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+
+/** `["step", ["get","duration_min"], firstColor, b1, c1, b2, c2, ...]` —
+ *  MapLibre's step expression colours by the *last* boundary at or below
+ *  the value, so bands must be ascending; the property is omitted
+ *  entirely (not `null`) on unreachable pieces so `!has` cleanly detects
+ *  them instead of relying on null-comparison quirks in expressions. */
+function isochroneStepExpression(): unknown[] {
+  const [first, ...rest] = ISOCHRONE_BANDS;
+  const steps = rest.flatMap((band, i) => [ISOCHRONE_BANDS[i].maxMinutes, band.color]);
+  return ["step", ["get", "duration_min"], first.color, ...steps];
+}
 
 function pieceStyle(): maplibregl.LayerSpecification {
   return {
@@ -30,11 +41,9 @@ function pieceStyle(): maplibregl.LayerSpecification {
     paint: {
       "line-color": [
         "case",
-        ["==", ["get", "access_status"], "broken"],
-        STATUS.broken,
-        ["==", ["get", "access_status"], "unreachable"],
-        STATUS.cutoff,
-        STATUS.reachable,
+        ["!", ["has", "duration_min"]],
+        UNREACHABLE_COLOR,
+        isochroneStepExpression(),
       ],
       "line-width": [
         "interpolate",
@@ -315,6 +324,10 @@ export class MapView {
       return {
         type: "Feature" as const,
         properties: {
+          // Omitted (not null) when unreachable — the paint expression
+          // uses `!has` to detect that, since MapLibre's `==` against a
+          // literal `null` is unreliable across property-missing states.
+          ...(p.duration_s !== null ? { duration_min: p.duration_s / 60 } : {}),
           access_status: p.reachable ? "reachable" : "unreachable",
           highway: props.highway ?? "",
           name: props.name ?? "",

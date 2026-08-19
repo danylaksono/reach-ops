@@ -4,7 +4,7 @@
 // one-shot compute_state used for map + HUD updates.
 
 import init, { Engine } from "../../pkg/reach_ops_engine.js";
-import type { ComputeState, Target } from "./types";
+import type { ComputeState, CostProfile, Target } from "./types";
 
 export type HubPoint = { coordinates: [number, number] };
 
@@ -94,5 +94,17 @@ export class ReachEngine {
    *  pieces + point break markers. */
   computeState(): ComputeState {
     return JSON.parse(this._engine.compute_state());
+  }
+
+  /** The engine's current travel-cost assumptions — read this to seed a
+   *  config panel rather than duplicating the Rust defaults in TS. */
+  getCostModel(): CostProfile {
+    return JSON.parse(this._engine.cost_model_json());
+  }
+
+  /** Replace the travel-cost assumptions. Does not itself recompute —
+   *  call `computeState()` afterwards. */
+  setCostModel(profile: CostProfile) {
+    this._engine.set_cost_model(JSON.stringify(profile));
   }
 }

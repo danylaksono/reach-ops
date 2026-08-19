@@ -11,7 +11,7 @@ export function FullscreenHud() {
   const engine = useDashboardStore((s) => s.engine);
 
   const total = lastResult?.settlements.length ?? 0;
-  const reached = lastResult?.settlements.filter((s) => s.distance_m !== null).length ?? 0;
+  const reached = lastResult?.settlements.filter((s) => s.duration_s !== null).length ?? 0;
   const reachPct = total ? Math.round((reached / total) * 100) : null;
   const brokenCount = (engine?.breakCount() ?? 0) + (engine?.broken.size ?? 0);
 

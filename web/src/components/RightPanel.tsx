@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { LayersPanel } from "./panels/LayersPanel";
 import { SettlementTable } from "./panels/SettlementTable";
 import { SimPanel } from "./panels/SimPanel";
+import { CostModelPanel } from "./panels/CostModelPanel";
 import { DataPanel } from "./panels/DataPanel";
 import { Separator } from "./ui/separator";
 
@@ -16,6 +17,7 @@ export function RightPanel() {
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="priority">Priority</TabsTrigger>
           <TabsTrigger value="simulate">Simulate</TabsTrigger>
+          <TabsTrigger value="cost">Cost</TabsTrigger>
           <TabsTrigger value="data">Data</TabsTrigger>
         </TabsList>
 
@@ -27,6 +29,9 @@ export function RightPanel() {
         </TabsContent>
         <TabsContent value="simulate">
           <SimPanel />
+        </TabsContent>
+        <TabsContent value="cost" className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+          <CostModelPanel />
         </TabsContent>
         <TabsContent value="data" className="overflow-y-auto">
           <DataPanel />
