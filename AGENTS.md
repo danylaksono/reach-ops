@@ -187,20 +187,38 @@ report.
 
 ### Phase 0 — Data preparation
 
-Two sub-steps, only the second of which is built so far:
+Two sub-steps:
 
-1. **Raw extraction (osmium) — not yet implemented as code.** Pull roads
-   and buildings out of a raw `.osm.pbf` (Geofabrik/Overpass) into the
-   national- or region-scale layers Phase 0 clips from. Skipped so far
-   only because `local-data/` already had `indonesia_roads.gpkg` and
+1. **Raw extraction — closed for roads, still open for buildings.**
+   The original gap: `local-data/` had `indonesia_roads.gpkg` and
    `indonesia_buildings.parquet` on hand, pre-extracted by hand outside
-   this repo. That's a reproducibility gap: retargeting this pipeline at
-   a new disaster site (or rebuilding from a bare `.osm.pbf`) needs this
-   step written as an actual osmium/pyosmium script, not assumed to
-   pre-exist. Keep this step distinct from step 2 rather than folding
-   raw-PBF parsing into the DuckDB clip job — osmium is the right tool
-   for OSM-native extraction; DuckDB `spatial` is the right tool for
-   clipping/joining already-tabular geodata.
+   this repo, so retargeting at a new disaster site silently assumed
+   someone would repeat that by hand.
+
+   **Roads: solved by sourcing from Overture instead of extracting from
+   a `.osm.pbf` at all** (`pipeline/roads_overture.py`, now the default).
+   Overture publishes an overwhelmingly OSM-derived transportation theme
+   as GeoParquet on public S3, so a study area is a bounding-box query
+   against a pinned, immutable release — no Geofabrik download, no
+   osmium step, nothing on local disk. Diffing it against the
+   hand-prepared extract on Flores also showed the extract had dropped
+   the `service` and `road` classes outright (+317 km, five more
+   settlements reachable), which is the second argument for the switch:
+   a hand-prepared layer has no way to tell you what it's missing.
+   Details and the full comparison in README.md.
+
+   **Buildings: still hand-prepared** (`indonesia_buildings.parquet`).
+   Same fix likely applies — Overture's buildings theme fuses OSM with
+   Google/Microsoft ML footprints, which is directly relevant to the
+   sparse rural coverage worry noted under Source.coop above — but it
+   hasn't been done, so this remains a reproducibility gap for any new
+   study area.
+
+   If a future source *does* need OSM-native extraction, keep it
+   distinct from step 2 rather than folding raw-PBF parsing into the
+   DuckDB clip job — osmium is the right tool for OSM-native extraction;
+   DuckDB `spatial` is the right tool for clipping/joining
+   already-tabular geodata.
 2. **Study-area clip (DuckDB `spatial`) — implemented in `pipeline/`.**
    Filters the (step 1) national-scale roads/buildings layers down to
    the study area boundary, and joins in cloud-native sources (Kontur

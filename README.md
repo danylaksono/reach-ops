@@ -19,7 +19,14 @@ outputs to `data/<study_area>/`:
 
 ```sh
 uv run python -m pipeline.run --study-area flores
+uv run python -m pipeline.run --study-area flores --roads-source local
 ```
+
+The road network is the exception to "clips `local-data/`": it comes from
+Overture Maps over the network by default, needing nothing on local disk
+(see [Roads from Overture Maps](#roads-from-overture-maps) below).
+`--roads-source local` selects the older path that clips
+`local-data/indonesia_roads.gpkg` instead.
 
 Outputs per study area: `boundary.geojson`, `settlements.geojson`,
 `roads.geojson` (routable road network), `buildings_by_settlement.parquet`,
@@ -43,6 +50,108 @@ in WKB` — a rerun of that step has always succeeded so far, with output
 counts identical to a clean run. Looks like an intermittent extension/GDAL
 load hiccup on this platform, not a data problem; hasn't been worth
 chasing further given it self-heals on retry.
+
+### Roads from Overture Maps
+
+`pipeline/roads_overture.py` — the default road source — builds
+`roads.geojson` from [Overture Maps](https://overturemaps.org) by
+querying its public GeoParquet on S3 with a study-area bounding box:
+
+```sh
+uv run python -m pipeline.roads_overture --study-area flores
+uv run python -m pipeline.roads_overture --study-area flores \
+  --out roads_overture.geojson    # build alongside, for comparison
+```
+
+It closed the Phase 0 step-1 reproducibility gap (AGENTS.md): retargeting
+the pipeline at a new disaster site used to assume someone had
+hand-extracted a national roads layer with osmium first. A bbox query
+against a pinned, immutable Overture release needs neither the Geofabrik
+download nor the osmium step. The release is pinned in
+`pipeline/config.py` (`OVERTURE_RELEASE`) so a rebuild is reproducible
+rather than silently tracking whatever is current — note the version list
+at `labs.overturemaps.org/data/releases.json` is frozen and behind; list
+releases from the bucket instead (the command is in `config.py`).
+
+Output is ordered by `segment_id` before it is written. That matters
+because the S3 parquet scan is parallel: two builds of the same release
+produce identical features in whatever order the threads finished, and
+`data/` is committed, so without a total order every rebuild would land
+as a whole-file diff on a 41MB file. Verified by building the release
+twice: same 48,261 features, byte-identical output apart from the
+GeoJSON `name`, which GDAL takes from the output filename.
+
+Overture's transportation theme is overwhelmingly OSM-derived, so this is
+a different *delivery* of the same survey data, not a second opinion
+about where the roads are. Two things have to be translated on the way in,
+which is the fiddly part:
+
+- **Oneway is inferred, not read.** Overture has no `oneway` field; a
+  one-way street is an `access_restrictions` entry with
+  `access_type = 'denied'` and `when.heading = 'backward'`. Only unscoped
+  restrictions count — a `between` covers part of a segment, and a `mode`
+  excluding cars (a contraflow cycle lane) is not a car oneway. OSM's
+  `reversible` has no Overture equivalent and comes through as
+  bidirectional (10 segments on Flores).
+- **Class vocabulary.** Overture has no `road` class (it uses `unknown`)
+  and no `*_link` classes (a link carries `subclass = 'link'` beside its
+  parent class). Both are normalised back to OSM spelling on the way out,
+  so the cost model's per-class speed table and the dashboard legend keep
+  working unchanged. Overture carries no lane count at all; `lanes` is
+  written as an empty column to keep the two sources schema-compatible.
+
+#### How the two compare on Flores
+
+Built from release `2026-08-19.0` (220s, most of it S3 parquet metadata
+scanning) and diffed against the committed extract:
+
+| | OSM extract | Overture |
+| --- | ---: | ---: |
+| segments | 25,360 | 48,261 |
+| network length | 16,109.8 km | 16,426.7 km |
+| mean segment length | 635 m | 340 m |
+| settlements reached (of 1,619) | 1,411 | 1,416 |
+
+Per class the two agree to within ±0.1% of length everywhere they
+overlap — the entire +316.9 km difference is two classes the
+hand-prepared extract was missing outright: **`service` (+270.9 km, 1,463
+segments) and `road`/`unknown` (+46.6 km, 455 segments), both at zero in
+the gpkg**. That gap is what puts five more settlements in reach. It is
+also the argument for the switch: nobody knew the local extract had
+dropped a class until there was a second source to diff against.
+
+The segment count doubles because Overture splits ways at connectors and
+attribute changes (1.97 segments per OSM way, max 70). Nothing is lost in
+the re-cut: 2,577 OSM way ids in the local extract don't appear in
+Overture, but all 2,577 have both endpoints present as Overture vertices,
+i.e. the geometry is there under different ids. Node sharing goes *up*
+(63.7% of graph nodes shared by 2+ segments, against 20.7%), so the
+engine's coordinate-dedup graph builder has more, not less, to work with.
+
+#### Known debts from the switch
+
+Both are about *identity*, not geometry, and both are deferred rather
+than solved:
+
+- **Break identity is now coarser than the map piece.** The engine keys
+  road breaks on `osm_id` (`engine/src/graph.rs`, `set_passable`), and
+  field reports reference it across rebuilds, so `osm_id` is mapped from
+  Overture's OSM source id where one exists. With ~2 Overture segments
+  per OSM way, one break click breaks every segment of that way rather
+  than the piece the coordinator clicked — a coordinator marking a
+  washed-out 200 m stretch takes out the whole way. Overture's own stable
+  GERS id is written alongside as `segment_id`; moving the break key to
+  that gives finer and more honest granularity, but it is a string
+  against an `i64` key, so it is an engine change, not a data change.
+- **Way ids are not stable across sources.** 10% of ids differ between
+  the two extracts, so field reports keyed on `osm_id` from a `local`
+  build do not all survive the switch. `segment_id` is the durable key
+  long-term, and the same engine change fixes both.
+
+Segments with no OSM source (459 on Flores, almost all `unknown`-class)
+get a negative synthetic `osm_id`, which cannot collide with a real one.
+These are build-local — do not persist a field report against one until
+the break key moves to `segment_id`.
 
 ## Phase 1 — client-side accessibility engine
 

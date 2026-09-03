@@ -22,6 +22,17 @@ STEPS = ["boundary", "roads", "buildings", "population", "baseline", "hubs"]
 # static base-data build). Run them separately, or pass --with-gik.
 GIK_STEPS = ["gik", "field"]
 
+# Where the road network comes from. Both write the same `roads.geojson`.
+#
+# `overture` is the default because it needs nothing on local disk — a
+# bbox query against a pinned Overture release, so retargeting at a new
+# disaster site has no hand-prepared national extract as a prerequisite.
+# `local` clips `local-data/indonesia_roads.gpkg` and stays available for
+# an offline rebuild, or to diff a new source against a known one; on
+# Flores it turned out to be missing the `service` and `road` classes
+# entirely (see the comparison in README.md).
+ROADS_SOURCES = {"overture": "roads_overture", "local": "roads"}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -32,6 +43,13 @@ def main() -> None:
         help="Study area to prepare (default: flores)",
     )
     parser.add_argument(
+        "--roads-source",
+        default="overture",
+        choices=sorted(ROADS_SOURCES),
+        help="Where the road network comes from (default: overture, which "
+        "needs no local extract; 'local' clips local-data/indonesia_roads.gpkg)",
+    )
+    parser.add_argument(
         "--with-gik",
         action="store_true",
         help="Also fetch the live UGM GIK field-report feed and build the "
@@ -40,7 +58,8 @@ def main() -> None:
     args = parser.parse_args()
 
     t0 = time.time()
-    steps = STEPS + (GIK_STEPS if args.with_gik else [])
+    steps = [ROADS_SOURCES[args.roads_source] if s == "roads" else s for s in STEPS]
+    steps += GIK_STEPS if args.with_gik else []
     for step in steps:
         result = subprocess.run(
             [sys.executable, "-m", f"pipeline.{step}", "--study-area", args.study_area]

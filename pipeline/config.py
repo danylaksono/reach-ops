@@ -62,6 +62,47 @@ ROUTABLE_HIGHWAY_CLASSES = [
     "tertiary_link",
 ]
 
+# --- Overture Maps (alternative road source; see pipeline/roads_overture.py) ---
+#
+# Overture publishes its themes as GeoParquet on a public S3 bucket, so the
+# road network for a new study area can be pulled by bounding box without a
+# Geofabrik download or an osmium extract step first. Releases are monthly
+# and immutable; pin one so a rebuild is reproducible rather than silently
+# tracking whatever is current. List available releases with:
+#   curl -s "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/?list-type=2&prefix=release/&delimiter=/"
+OVERTURE_RELEASE = "2026-08-19.0"
+OVERTURE_REGION = "us-west-2"
+OVERTURE_SEGMENTS = (
+    f"s3://overturemaps-{OVERTURE_REGION}/release/{OVERTURE_RELEASE}"
+    "/theme=transportation/type=segment/*"
+)
+
+# Overture `class` values kept as part of the routable network — the same
+# motorised-network intent as ROUTABLE_HIGHWAY_CLASSES above, expressed in
+# Overture's vocabulary. Two differences from OSM's `highway` tag:
+#   * Overture has no `road` class; an unclassifiable road is `unknown`.
+#   * Overture has no `*_link` classes; a link carries `subclass = 'link'`
+#     alongside its parent class.
+# Both are normalised back to OSM spelling on the way out, so downstream
+# consumers (the cost model's per-class speed table, the dashboard legend)
+# keep working unchanged.
+OVERTURE_ROUTABLE_CLASSES = [
+    "motorway",
+    "trunk",
+    "primary",
+    "secondary",
+    "tertiary",
+    "unclassified",
+    "residential",
+    "service",
+    "living_street",
+    "track",
+    "unknown",
+]
+
+# Overture classes that take a `*_link` spelling in OSM when subclass='link'.
+OVERTURE_LINKABLE_CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary"]
+
 
 def study_area_dir(study_area: str) -> Path:
     out = DATA_OUT / study_area

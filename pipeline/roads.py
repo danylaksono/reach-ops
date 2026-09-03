@@ -2,7 +2,15 @@
 non-routable highway classes, keeping the attributes a routing engine
 needs (highway class, oneway, speed, surface, bridge/tunnel flags).
 
+No longer the default source — `pipeline.roads_overture` is, because it
+needs nothing on local disk. This step stays for offline rebuilds and as
+the known-quantity side of a source diff. Note that on Flores the
+national extract it reads turned out to be missing the `service` and
+`road` highway classes outright (README.md, "Roads from Overture Maps"),
+so `local-data/indonesia_roads.gpkg` is not a complete OSM road layer.
+
 Run standalone: python -m pipeline.roads [--study-area flores]
+Via the full run: python -m pipeline.run --roads-source local
 """
 
 from pipeline.boundary import load_boundary_wkt

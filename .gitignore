@@ -1,6 +1,11 @@
 # Raw and derived geodata (large, re-fetchable — not versioned)
 local-data/
 
+# Side-by-side road builds from `pipeline.roads_overture --out ...`, used to
+# diff one source against another. data/ is otherwise committed, but a second
+# copy of the network is tens of MB and is not a build input.
+data/*/roads_*.geojson
+
 # Python
 __pycache__/
 *.pyc
