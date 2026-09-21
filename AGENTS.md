@@ -666,6 +666,9 @@ OGR: HUGEINT`) — cast aggregates to BIGINT explicitly.
 
 - User has other ideas for this project not yet detailed — to be added
   as they come up.
+- **Future routing-engine option.** Review [tobilg/valhalla-wasm](https://github.com/tobilg/valhalla-wasm)
+  later as a possible alternative or complement to the current Rust/WASM
+  routing engine.
 - **Islands / structurally isolated segments.** Some settlements (small
   islands, islets off Flores) have no road connection to the mainland
   network at all — not cut off by the earthquake, just never
